@@ -27,6 +27,8 @@ pub struct AppState {
     pub history: Arc<Mutex<History>>,
     pub jobs: JobManager,
     pub sevenzip_licence: PathBuf,
+    /// Bundled licence texts (GPL, AGPL, Apache, ImageMagick).
+    pub licenses_dir: PathBuf,
 }
 
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -52,6 +54,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let sevenzip_licence = app
         .path()
         .resolve("bin/7zip-License.txt", BaseDirectory::Resource)?;
+    let licenses_dir = app.path().resolve("licenses", BaseDirectory::Resource)?;
     let engine_names: HashMap<String, String> = manifest
         .engines
         .iter()
@@ -126,6 +129,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         history,
         jobs,
         sevenzip_licence,
+        licenses_dir,
     });
     Ok(())
 }

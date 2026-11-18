@@ -3,14 +3,14 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_state::AppState;
 use crate::engines::{ENGINE_BUSY, EngineRow, Engines};
 use crate::history::{History, JobRecord};
-use crate::jobs::notify::Notifier;
+use crate::jobs::notify::{Notifier, unless_watching};
 use crate::jobs::{Events, JobEvent};
 use crate::lockutil::lock;
 use crate::pad_model::{self, PadModel};
@@ -31,6 +31,14 @@ impl TauriEvents {
     }
 }
 
+impl TauriEvents {
+    fn companion_in_front(&self) -> bool {
+        self.app
+            .get_webview_window("companion")
+            .is_some_and(|w| w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false))
+    }
+}
+
 impl Events for TauriEvents {
     fn emit(&self, ev: &JobEvent) {
         let name = match ev.status.as_str() {
@@ -45,6 +53,7 @@ impl Events for TauriEvents {
         }
         // Out of the lock before show(): the OS call may be slow.
         let n = lock(&self.notifier).on_event(ev);
+        let n = unless_watching(n, self.companion_in_front());
         if let Some(n) = n
             && let Err(e) = self
                 .app
@@ -72,6 +81,8 @@ pub struct Notice {
     pub licence: String,
     pub homepage: String,
     pub source_url: Option<String>,
+    /// Where the licence text lives on disk; read by `notice_text`, never sent to the webview.
+    #[serde(skip)]
     pub licence_file: Option<String>,
     /// Shipped inside Recast (7-Zip) rather than downloaded.
     pub bundled: bool,
@@ -276,27 +287,8 @@ pub async fn open_job(
         .map_err(|e| e.to_string())
 }
 
-/// Shows the licence file of the notice at `index` (as listed by `notices`) in its folder.
-#[tauri::command]
-pub async fn reveal_notice(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    index: usize,
-) -> Result<(), String> {
-    let (engines, licence) = (state.engines.clone(), state.sevenzip_licence.clone());
-    let file = blocking(move || {
-        build_notices(&engines, &licence)
-            .into_iter()
-            .nth(index)
-            .and_then(|n| n.licence_file)
-            .ok_or_else(|| "There is no licence file to show.".to_string())
-    })
-    .await?;
-    app.opener()
-        .reveal_item_in_dir(file)
-        .map_err(|e| e.to_string())
-}
-
+/// Preferred licence file in an engine folder: plain text (.txt, .md or no extension)
+/// before anything else, then the shallowest path.
 fn licence_file(dir: &std::path::Path) -> Option<String> {
     crate::fsutil::walk_files(dir)
         .into_iter()
@@ -307,8 +299,78 @@ fn licence_file(dir: &std::path::Path) -> Option<String> {
                 .unwrap_or_default();
             n.starts_with("LICENSE") || n.starts_with("COPYING") || n.starts_with("COPYRIGHT")
         })
-        .min_by_key(|p| p.components().count())
+        .min_by_key(|p| {
+            let plain = matches!(
+                p.extension()
+                    .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                    .as_deref(),
+                None | Some("txt") | Some("md")
+            );
+            (!plain, p.components().count())
+        })
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+const LICENCE_TEXT_CAP: u64 = 512 * 1024;
+
+/// Plain-text read, at most 512 KB, invalid UTF-8 replaced; None for unreadable or binary files.
+fn read_licence_text(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .ok()?
+        .take(LICENCE_TEXT_CAP)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.contains(&0) {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// File in `licenses/` holding the text of an SPDX-style licence id.
+fn bundled_licence_file(licence: &str) -> Option<&'static str> {
+    let id = licence
+        .trim_end_matches("-or-later")
+        .trim_end_matches("-only")
+        .trim_end_matches('+');
+    match id {
+        "GPL-3.0" => Some("GPL-3.0.txt"),
+        "GPL-2.0" => Some("GPL-2.0.txt"),
+        "AGPL-3.0" => Some("AGPL-3.0.txt"),
+        "Apache-2.0" => Some("Apache-2.0.txt"),
+        "ImageMagick" => Some("ImageMagick.txt"),
+        _ => None,
+    }
+}
+
+/// The notice's own licence file when it is there, else the text Recast ships.
+fn licence_text(n: &Notice, licenses_dir: &std::path::Path) -> Result<String, String> {
+    n.licence_file
+        .as_deref()
+        .and_then(|f| read_licence_text(std::path::Path::new(f)))
+        .or_else(|| {
+            bundled_licence_file(&n.licence).and_then(|f| read_licence_text(&licenses_dir.join(f)))
+        })
+        .ok_or_else(|| format!("No licence text is available for {}.", n.name))
+}
+
+/// The licence text of the notice at `index` (as listed by `notices`).
+#[tauri::command]
+pub async fn notice_text(state: State<'_, AppState>, index: usize) -> Result<String, String> {
+    let (engines, licence, dir) = (
+        state.engines.clone(),
+        state.sevenzip_licence.clone(),
+        state.licenses_dir.clone(),
+    );
+    blocking(move || {
+        let notices = build_notices(&engines, &licence);
+        let n = notices
+            .get(index)
+            .ok_or_else(|| "That notice no longer exists.".to_string())?;
+        licence_text(n, &dir)
+    })
+    .await
 }
 
 fn build_notices(engines: &Engines, sevenzip_licence: &std::path::Path) -> Vec<Notice> {
@@ -377,6 +439,67 @@ mod tests {
         h.set_temp("a", None).unwrap();
         assert!(check_removable(&h, "a").is_ok());
         assert!(check_removable(&h, "missing").is_ok());
+    }
+
+    fn notice(licence: &str, file: Option<&std::path::Path>) -> Notice {
+        Notice {
+            name: "Tool".into(),
+            licence: licence.into(),
+            homepage: String::new(),
+            source_url: None,
+            licence_file: file.map(|f| f.to_string_lossy().into_owned()),
+            bundled: false,
+        }
+    }
+
+    fn bundled_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("licenses")
+    }
+
+    #[test]
+    fn every_manifest_licence_has_bundled_text() {
+        let m =
+            crate::engines::manifest::Manifest::parse(crate::engines::manifest::BUNDLED).unwrap();
+        for e in &m.engines {
+            let t = licence_text(&notice(&e.licence, None), &bundled_dir())
+                .unwrap_or_else(|err| panic!("{}: {err}", e.licence));
+            assert!(t.len() > 1000, "{} text is too short", e.licence);
+        }
+    }
+
+    #[test]
+    fn an_installed_engines_own_licence_wins_and_is_capped() {
+        let d = tempfile::tempdir().unwrap();
+        let own = d.path().join("LICENSE.txt");
+        std::fs::write(&own, "own terms").unwrap();
+        assert_eq!(
+            licence_text(&notice("GPL-3.0-or-later", Some(&own)), &bundled_dir()).unwrap(),
+            "own terms"
+        );
+        let big = d.path().join("COPYING");
+        std::fs::write(&big, vec![b'a'; 600 * 1024]).unwrap();
+        let t = licence_text(&notice("MIT", Some(&big)), &bundled_dir()).unwrap();
+        assert_eq!(t.len(), 512 * 1024);
+        // Binary files fall back to the bundled text; unknown ids have none.
+        let bin = d.path().join("LICENSE.pdf");
+        std::fs::write(&bin, b"%PDF\0\0").unwrap();
+        assert!(
+            licence_text(&notice("Apache-2.0", Some(&bin)), &bundled_dir())
+                .unwrap()
+                .contains("Apache License")
+        );
+        assert!(licence_text(&notice("MIT", Some(&bin)), &bundled_dir()).is_err());
+        assert!(licence_text(&notice("MIT", None), &bundled_dir()).is_err());
+    }
+
+    #[test]
+    fn plain_text_licence_files_are_preferred() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("docs")).unwrap();
+        std::fs::write(d.path().join("LICENSE.html"), "h").unwrap();
+        std::fs::write(d.path().join("docs").join("LICENSE.txt"), "t").unwrap();
+        let picked = licence_file(d.path()).unwrap();
+        assert!(picked.ends_with("LICENSE.txt"), "{picked}");
     }
 
     #[test]

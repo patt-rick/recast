@@ -10,6 +10,21 @@ export function Library() {
   const [messages, setMessages] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  // Licence texts currently expanded, by notice name.
+  const [licences, setLicences] = useState<Record<string, string>>({});
+
+  const toggleLicence = async (index: number, name: string) => {
+    if (name in licences) {
+      setLicences(({ [name]: _gone, ...rest }) => rest);
+      return;
+    }
+    try {
+      const text = await ipc.noticeText(index);
+      setLicences((l) => ({ ...l, [name]: text }));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const say = (id: string, msg: string | null) =>
     setMessages((m) => {
@@ -109,10 +124,10 @@ export function Library() {
           <li key={n.name} className="row">
             <div>
               <strong>{n.name}</strong> <span className="muted">{n.licence}{n.bundled ? " · included with Recast" : " · downloaded from upstream"}</span>
+              {n.name in licences && <pre className="licence-text" tabIndex={0} aria-label={`${n.name} licence`}>{licences[n.name]}</pre>}
             </div>
             <div className="job-actions">
-              {/* Reveal, not open: licence files are often extensionless (LICENSE, COPYING). */}
-              {n.licence_file && <button onClick={() => ipc.revealNotice(i).catch((e) => setError(String(e)))}>Licence</button>}
+              <button aria-expanded={n.name in licences} onClick={() => toggleLicence(i, n.name)}>Licence</button>
               <button onClick={() => openUrl(n.homepage)}>Website</button>
               {n.source_url && <button onClick={() => openUrl(n.source_url!)}>Source</button>}
             </div>

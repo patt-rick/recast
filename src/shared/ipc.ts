@@ -21,8 +21,8 @@ export const ipc = {
   /** Only a finished job's saved file can be shown or opened; the backend looks it up. */
   revealJob: (id: string) => invoke<void>("reveal_job", { id }),
   openJob: (id: string) => invoke<void>("open_job", { id }),
-  /** Shows the licence file of the notice at this index of `notices()`. */
-  revealNotice: (index: number) => invoke<void>("reveal_notice", { index }),
+  /** Licence text of the notice at this index of `notices()`: the engine's own file, else the bundled text. */
+  noticeText: (index: number) => invoke<string>("notice_text", { index }),
   notices: () => invoke<Notice[]>("notices"),
 };
 

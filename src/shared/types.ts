@@ -93,7 +93,6 @@ export interface Notice {
   licence: string;
   homepage: string;
   source_url: string | null;
-  licence_file: string | null;
   bundled: boolean;
 }
 
