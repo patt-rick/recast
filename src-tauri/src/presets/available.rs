@@ -218,6 +218,21 @@ mod tests {
     }
 
     #[test]
+    fn video_plus_audio_has_no_common_preset() {
+        let c = Catalog::parse(BUNDLED).unwrap();
+        let a = available(
+            &c,
+            &[
+                f(Kind::Video, "mp4", Some(true)),
+                f(Kind::Audio, "flac", Some(true)),
+            ],
+            &NO_CAPS,
+        );
+        assert!(a.presets.is_empty());
+        assert!(a.open_in_recast);
+    }
+
+    #[test]
     fn magick_capabilities_hide_unwritable_formats() {
         let c = Catalog::parse(BUNDLED).unwrap();
         let caps: BTreeSet<String> = [

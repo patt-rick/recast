@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::detect::{Kind, canonical, ext_of};
+use crate::detect::{Kind, canonical, ext_for_format, ext_of};
 
 pub const BUNDLED: &str = include_str!("../../presets/presets.toml");
 
@@ -150,10 +150,18 @@ impl Preset {
         self.min_files >= 2
     }
 
-    pub fn out_ext_for(&self, input: &Path) -> String {
+    /// `input_format`: the input's detected canonical format, used when "same" meets a
+    /// file with no extension.
+    pub fn out_ext_for(&self, input: &Path, input_format: &str) -> String {
         if self.out_ext == "same" {
             let e = ext_of(input);
-            if e.is_empty() { "bin".into() } else { e }
+            if !e.is_empty() {
+                e
+            } else if !input_format.is_empty() {
+                ext_for_format(input_format).to_string()
+            } else {
+                "bin".into()
+            }
         } else {
             self.out_ext.clone()
         }
@@ -413,6 +421,23 @@ passes = [['--empty', '--pages', '{inputs}', '--', '{out}']]
         let c = Catalog::parse(MINI).unwrap();
         let p = c.get("v-mp3").unwrap();
         assert_eq!(p.out_format_for("mov"), "mp3");
-        assert_eq!(p.out_ext_for(std::path::Path::new("C:/a/b.MOV")), "mp3");
+        assert_eq!(
+            p.out_ext_for(std::path::Path::new("C:/a/b.MOV"), "mov"),
+            "mp3"
+        );
+    }
+
+    #[test]
+    fn same_ext_falls_back_to_the_detected_format() {
+        let same = Catalog::parse(&MINI.replace("out_ext = \"mp3\"", "out_ext = \"same\""))
+            .unwrap();
+        let p = same.get("v-mp3").unwrap();
+        let ext = |path: &str, fmt: &str| p.out_ext_for(std::path::Path::new(path), fmt);
+        assert_eq!(ext("C:/a/b.PNG", "jpeg"), "png", "an extension wins");
+        assert_eq!(ext("C:/a/photo", "png"), "png");
+        assert_eq!(ext("C:/a/photo", "jpeg"), "jpg");
+        assert_eq!(ext("C:/a/photo", "tiff"), "tif");
+        assert_eq!(ext("C:/a/photo", "heif"), "heic");
+        assert_eq!(ext("C:/a/photo", ""), "bin");
     }
 }

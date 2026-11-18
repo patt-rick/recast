@@ -59,6 +59,16 @@ pub fn canonical(ext: &str) -> String {
     }
 }
 
+/// Canonical format → a file extension for it (inverse of `canonical` where they differ).
+pub fn ext_for_format(format: &str) -> &str {
+    match format {
+        "jpeg" => "jpg",
+        "tiff" => "tif",
+        "heif" => "heic",
+        other => other,
+    }
+}
+
 pub fn ext_of(path: &Path) -> String {
     path.extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -79,12 +89,21 @@ fn kind_for_mime(mime: &str) -> Kind {
     }
 }
 
+/// MPEG-TS packets are 188 bytes and each starts with the sync byte 0x47.
+fn looks_like_mpeg_ts(head: &[u8]) -> bool {
+    head.first() == Some(&0x47) && head.get(188).is_none_or(|b| *b == 0x47)
+}
+
 /// Kind and canonical format from the extension and the first bytes.
 /// The extension wins unless the magic bytes say a different top-level kind;
 /// audio vs video containers are left to ffprobe; images take the magic format.
 pub fn classify(path: &Path, head: &[u8]) -> (Kind, String) {
     let ext = ext_of(path);
-    let ext_kind = kind_for_ext(&ext);
+    let mut ext_kind = kind_for_ext(&ext);
+    // `.ts` is also TypeScript: only MPEG-TS content counts as video.
+    if ext == "ts" && !looks_like_mpeg_ts(head) {
+        ext_kind = Kind::Unknown;
+    }
     let magic = infer::get(head).map(|t| (kind_for_mime(t.mime_type()), canonical(t.extension())));
     match magic {
         Some((mk, mfmt)) if mk != Kind::Unknown => {
@@ -202,12 +221,22 @@ pub fn refine(info: &mut FileInfo, p: &Probe) {
     }
 }
 
+/// Bytes read from the start of a file for classification (enough for MPEG-TS's second packet).
+pub const HEAD_LEN: usize = 512;
+
+pub fn read_head(path: &Path) -> std::io::Result<Vec<u8>> {
+    let mut head = Vec::with_capacity(HEAD_LEN);
+    std::fs::File::open(path)?
+        .take(HEAD_LEN as u64)
+        .read_to_end(&mut head)?;
+    Ok(head)
+}
+
 /// Detect one file. `probe` runs ffprobe when FFmpeg is installed (else returns None).
 pub fn detect(path: &Path, probe: &dyn Fn(&Path) -> Option<Probe>) -> std::io::Result<FileInfo> {
     let meta = std::fs::metadata(path)?;
-    let mut head = [0u8; 64];
-    let n = std::fs::File::open(path)?.read(&mut head)?;
-    let (kind, format) = classify(path, &head[..n]);
+    let head = read_head(path)?;
+    let (kind, format) = classify(path, &head);
     let mut info = FileInfo::bare(path, kind, format, meta.len());
     if matches!(kind, Kind::Video | Kind::Audio)
         && let Some(p) = probe(path)
@@ -238,6 +267,14 @@ mod tests {
         assert_eq!(canonical("aif"), "aiff");
         assert_eq!(canonical("heic"), "heif");
         assert_eq!(canonical("mkv"), "mkv");
+    }
+
+    #[test]
+    fn extensions_for_formats() {
+        assert_eq!(ext_for_format("jpeg"), "jpg");
+        assert_eq!(ext_for_format("tiff"), "tif");
+        assert_eq!(ext_for_format("heif"), "heic");
+        assert_eq!(ext_for_format("png"), "png");
     }
 
     #[test]
@@ -276,6 +313,43 @@ mod tests {
             classify(Path::new("C:/x/download.bin"), &PNG),
             (Kind::Image, "png".to_string())
         );
+    }
+
+    #[test]
+    fn ts_is_video_only_when_it_looks_like_mpeg_ts() {
+        let mut ts = vec![0u8; 400];
+        ts[0] = 0x47;
+        ts[188] = 0x47;
+        assert_eq!(
+            classify(Path::new("C:/x/clip.ts"), &ts),
+            (Kind::Video, "ts".to_string())
+        );
+        // Short head: only the first sync byte can be checked.
+        assert_eq!(classify(Path::new("C:/x/clip.ts"), &[0x47, 0, 0]).0, Kind::Video);
+        assert_eq!(
+            classify(Path::new("C:/x/app.ts"), b"import { a } from './a';
+").0,
+            Kind::Unknown
+        );
+        // 0x47 first but no second sync byte: not a transport stream.
+        ts[188] = 0;
+        assert_eq!(classify(Path::new("C:/x/app.ts"), &ts).0, Kind::Unknown);
+        assert_eq!(classify(Path::new("C:/x/empty.ts"), &[]).0, Kind::Unknown);
+    }
+
+    #[test]
+    fn detect_reads_enough_head_for_mpeg_ts() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("clip.ts");
+        let mut bytes = vec![0u8; 400];
+        bytes[0] = 0x47;
+        bytes[188] = 0x47;
+        std::fs::write(&p, &bytes).unwrap();
+        assert_eq!(detect(&p, &|_| None).unwrap().kind, Kind::Video);
+        let q = d.path().join("app.ts");
+        std::fs::write(&q, b"export const a = 1;
+".repeat(30)).unwrap();
+        assert_eq!(detect(&q, &|_| None).unwrap().kind, Kind::Unknown);
     }
 
     #[test]

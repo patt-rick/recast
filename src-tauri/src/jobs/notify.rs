@@ -21,6 +21,13 @@ pub struct Notifier {
     batches: HashMap<String, Tally>,
 }
 
+/// The Activity row already shows a result while the Recast window is open and in
+/// front, so a toast on top of it is noise. `on_event` still runs for every event
+/// (batch tallies must stay correct); only the toast is dropped.
+pub fn unless_watching(n: Option<Notification>, window_visible_and_focused: bool) -> Option<Notification> {
+    n.filter(|_| !window_visible_and_focused)
+}
+
 fn base(p: &str) -> String {
     p.rsplit(['\\', '/']).next().unwrap_or(p).to_string()
 }
@@ -122,6 +129,16 @@ mod tests {
         assert_eq!(f.title, "Couldn't convert holiday.mov");
         assert_eq!(f.body, "The file looks damaged or incomplete.");
         assert_eq!(n.on_event(&ev("d", 1, "cancelled")), None);
+    }
+
+    #[test]
+    fn no_toast_while_the_window_is_visible_and_focused() {
+        let mut n = Notifier::default();
+        let toast = n.on_event(&ev("b", 1, "done"));
+        assert!(toast.is_some());
+        assert_eq!(unless_watching(toast.clone(), true), None);
+        assert_eq!(unless_watching(toast.clone(), false), toast);
+        assert_eq!(unless_watching(None, false), None);
     }
 
     #[test]

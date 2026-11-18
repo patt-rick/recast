@@ -30,16 +30,32 @@ pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub const CREATE_SUSPENDED: u32 = 0x0000_0004;
 
 /// NUL-terminated UTF-16 path. Absolute paths of 248+ chars get the `\?\`
-/// (or `\?\UNC\`) prefix so these Win32 calls work past MAX_PATH.
+/// (or `\?\UNC\`) prefix so these Win32 calls work past MAX_PATH. The verbatim
+/// prefix switches off Win32's `.`/`..` handling, so long paths are normalised first.
 fn wide(p: &Path) -> Vec<u16> {
-    const BS: u16 = b'\\' as u16;
-    let raw: Vec<u16> = p
-        .as_os_str()
+    let plain = p.as_os_str().len() < 248 || p.as_os_str().encode_wide().take(4).eq(VERBATIM);
+    let normal = if plain {
+        None
+    } else {
+        std::path::absolute(p).ok()
+    };
+    let p = normal.as_deref().unwrap_or(p);
+    let mut out = verbatim_wide(p.as_os_str(), p.is_absolute());
+    out.push(0);
+    out
+}
+
+const BS: u16 = b'\\' as u16;
+const VERBATIM: [u16; 4] = [BS, BS, b'?' as u16, BS];
+
+/// The pure string transform behind `wide` (no NUL): forward slashes become
+/// backslashes and long absolute paths get the verbatim prefix.
+fn verbatim_wide(raw: &std::ffi::OsStr, absolute: bool) -> Vec<u16> {
+    let raw: Vec<u16> = raw
         .encode_wide()
         .map(|c| if c == b'/' as u16 { BS } else { c })
         .collect();
-    let verbatim = raw.starts_with(&[BS, BS, b'?' as u16, BS]);
-    let mut out: Vec<u16> = if raw.len() >= 248 && !verbatim && p.is_absolute() {
+    if raw.len() >= 248 && !raw.starts_with(&VERBATIM) && absolute {
         if raw.starts_with(&[BS, BS]) {
             r"\\?\UNC"
                 .encode_utf16()
@@ -50,9 +66,7 @@ fn wide(p: &Path) -> Vec<u16> {
         }
     } else {
         raw
-    };
-    out.push(0);
-    out
+    }
 }
 
 fn to_io(e: windows::core::Error) -> io::Error {
@@ -113,17 +127,30 @@ impl Drop for KillGroup {
     }
 }
 
-/// Spawn `cmd` suspended (and windowless), put it in `group`, then let it run, so
-/// no child it starts can escape the group. Overrides any creation flags on `cmd`.
-pub fn spawn_contained(cmd: &mut std::process::Command, group: &KillGroup) -> io::Result<Child> {
+/// Spawn `cmd` suspended (and windowless) and put it in `group`. It has executed no
+/// code yet: call `resume_process_main_thread` to let it run. Overrides any creation
+/// flags on `cmd`.
+pub fn spawn_suspended_in_group(
+    cmd: &mut std::process::Command,
+    group: &KillGroup,
+) -> io::Result<Child> {
     use std::os::windows::process::CommandExt;
     let mut child = cmd
         .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED)
         .spawn()?;
-    let started = group
-        .assign(&child)
-        .and_then(|()| resume_process_main_thread(child.id()));
-    if let Err(e) = started {
+    if let Err(e) = group.assign(&child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
+    Ok(child)
+}
+
+/// Spawn `cmd` suspended, put it in `group`, then let it run, so no child it
+/// starts can escape the group.
+pub fn spawn_contained(cmd: &mut std::process::Command, group: &KillGroup) -> io::Result<Child> {
+    let mut child = spawn_suspended_in_group(cmd, group)?;
+    if let Err(e) = resume_process_main_thread(child.id()) {
         let _ = child.kill();
         let _ = child.wait();
         return Err(e);
@@ -271,6 +298,62 @@ mod tests {
         .unwrap();
         group.kill();
         assert!(!hung.wait().unwrap().success());
+    }
+
+    #[test]
+    fn a_contained_process_has_not_run_before_it_is_resumed() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker.txt");
+        let group = KillGroup::new().unwrap();
+        let mut cmd = Command::new(crate::testutil::fake_engine());
+        cmd.arg("marker").arg(&marker).stdout(Stdio::null());
+        let mut child = spawn_suspended_in_group(&mut cmd, &group).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!marker.exists(), "it ran before being resumed");
+        assert!(is_process_alive(child.id()));
+        resume_process_main_thread(child.id()).unwrap();
+        assert!(child.wait().unwrap().success());
+        assert!(marker.exists(), "it never ran after the resume");
+    }
+
+    #[test]
+    fn wide_prefixes_only_long_absolute_paths() {
+        let w = |s: &str| {
+            String::from_utf16(&verbatim_wide(std::ffi::OsStr::new(s), true)).unwrap()
+        };
+        assert_eq!(w(r"C:\short\a.txt"), r"C:\short\a.txt");
+        assert_eq!(w("C:/short/a.txt"), r"C:\short\a.txt");
+        let long = format!(r"C:\{}", "x".repeat(250));
+        assert_eq!(w(&long), format!(r"\\?\{long}"));
+        let unc = format!(r"\\server\share\{}", "x".repeat(250));
+        assert_eq!(w(&unc), format!(r"\\?\UNC{}", &unc[1..]));
+        let verbatim = format!(r"\\?\C:\{}", "x".repeat(250));
+        assert_eq!(w(&verbatim), verbatim);
+        // Relative paths are never prefixed.
+        let rel = "y".repeat(300);
+        assert_eq!(
+            String::from_utf16(&verbatim_wide(std::ffi::OsStr::new(&rel), false)).unwrap(),
+            rel
+        );
+    }
+
+    #[test]
+    fn long_paths_with_dot_dot_segments_are_normalised() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut deep = dir.path().to_path_buf();
+        while deep.as_os_str().len() < 300 {
+            deep.push("a-fairly-long-folder-name-for-testing");
+        }
+        std::fs::create_dir_all(deep.join("detour")).unwrap();
+        std::fs::write(deep.join("in.txt"), "x").unwrap();
+        // The same folder, spelled by walking into a child and back out with "..".
+        let via = deep.join("detour").join("..");
+        move_no_replace(&via.join("in.txt"), &via.join("out.txt")).unwrap();
+        assert!(deep.join("out.txt").exists());
+        assert!(!deep.join("in.txt").exists());
+        set_hidden(&via).unwrap();
+        assert!(is_hidden(&deep));
+        assert!(!is_hidden(&deep.join("detour")));
     }
 
     #[test]

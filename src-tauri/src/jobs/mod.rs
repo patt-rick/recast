@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-use crate::detect::{Probe, ext_of};
+use crate::detect::{Probe, classify, ext_of, read_head};
 pub use crate::engines::EngineLease;
 use crate::history::{Finish, History};
 use crate::lockutil::lock;
@@ -39,6 +39,7 @@ pub enum ErrorCode {
     DiskFull,
     TargetTooSmall,
     AlreadySmall,
+    SameFormat,
     Cancelled,
     Interrupted,
 }
@@ -55,6 +56,7 @@ impl ErrorCode {
             Self::DiskFull => "DISK_FULL",
             Self::TargetTooSmall => "TARGET_TOO_SMALL",
             Self::AlreadySmall => "ALREADY_SMALL",
+            Self::SameFormat => "SAME_FORMAT",
             Self::Cancelled => "CANCELLED",
             Self::Interrupted => "INTERRUPTED",
         }
@@ -323,6 +325,9 @@ impl JobManager {
         } else {
             abs.into_iter().map(|p| vec![p]).collect()
         };
+        // A file already in the output format is skipped on its own, so a mixed
+        // batch (PNG + JPEG → PNG) converts only the files that need it.
+        let skip_same = !preset.is_multi() && !preset.keep_same_format && preset.out_ext != "same";
         let batch_id = uuid::Uuid::new_v4().to_string();
         let batch_size = groups.len();
         let mut ids = Vec::new();
@@ -345,6 +350,10 @@ impl JobManager {
                 .map_err(|e| e.to_string())?;
             self.inner.emit(&job, "queued", None, None, None, None);
             ids.push(job.id.clone());
+            if skip_same && let Some(msg) = same_format_message(preset, &job.inputs[0]) {
+                self.inner.skip_same_format(&job, msg);
+                continue;
+            }
             lock(&self.inner.state).queue.push_back(job);
         }
         Inner::pump(&self.inner);
@@ -417,6 +426,32 @@ impl Inner {
             Some(JobError {
                 code: ErrorCode::EngineFailed,
                 message: message.into(),
+            }),
+        );
+    }
+
+    /// Finish a job that never needs the engine because its input is already in the
+    /// output format. Recorded and announced like any other skipped job.
+    fn skip_same_format(&self, job: &Job, msg: String) {
+        let _ = lock(&self.history).finish(
+            &job.id,
+            &Finish {
+                status: "skipped",
+                error_code: Some(ErrorCode::SameFormat.as_str()),
+                error_detail: Some(&msg),
+                ..Default::default()
+            },
+            now(),
+        );
+        self.emit(
+            job,
+            "skipped",
+            None,
+            None,
+            None,
+            Some(JobError {
+                code: ErrorCode::SameFormat,
+                message: msg,
             }),
         );
     }
@@ -750,7 +785,13 @@ impl Inner {
         };
         let _ = platform::set_hidden(&tmp);
 
-        let out_ext = preset.out_ext_for(first);
+        // Only an extensionless "same" output needs the input's sniffed format.
+        let in_format = if preset.out_ext == "same" && ext_of(first).is_empty() {
+            detected_format(first)
+        } else {
+            String::new()
+        };
+        let out_ext = preset.out_ext_for(first, &in_format);
         // A name is taken if it exists, or if one of its extra outputs (e.g. Markdown's
         // "<stem>_media" folder) does: the .md links to that folder by name.
         let base_vars = vars.clone();
@@ -912,6 +953,20 @@ impl Inner {
         }
         result.map(Finished::Done)
     }
+}
+
+/// Canonical format from the extension and the file's first bytes ("" if unreadable).
+fn detected_format(path: &Path) -> String {
+    read_head(path)
+        .map(|h| classify(path, &h).1)
+        .unwrap_or_default()
+}
+
+/// "<name> is already PNG." when the input is already the preset's output format.
+fn same_format_message(preset: &Preset, input: &Path) -> Option<String> {
+    let format = detected_format(input);
+    (!format.is_empty() && preset.out_format_for(&format) == format)
+        .then(|| format!("{} is already {}.", file_name(input), preset.label))
 }
 
 /// `<dest>\.recast-<id>` normally; engines can't use a working directory past
@@ -1195,6 +1250,31 @@ keep_same_format = true
 out_ext = "same"
 out_naming = "suffix:small"
 passes = [['write_out', '{out}', '{video_kbps}']]
+
+[[preset]]
+id = "topng"
+label = "PNG"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "fake"
+bin = "fake"
+out_ext = "png"
+out_naming = "replace_ext"
+passes = [['ok', '{out}']]
+
+[[preset]]
+id = "samecopy"
+label = "Same"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "fake"
+bin = "fake"
+keep_same_format = true
+out_ext = "same"
+out_naming = "suffix:copy"
+passes = [['write_out', '{out}', '10']]
 
 [[preset]]
 id = "diskfull"
@@ -1690,6 +1770,46 @@ passes = [['ok', '{out}']]
                 .is_file()
         );
         assert_eq!(r.names(), ["notes.docx", "notes.md", "notes_media"]);
+    }
+
+    #[test]
+    fn mixed_batch_skips_only_the_file_already_in_the_target_format() {
+        let r = rig();
+        let png = r.file("a.png", b"x");
+        let jpg = r.file("b.jpg", b"y");
+        let ids = r.mgr.start_jobs("topng", &[png, jpg]).unwrap();
+        let skipped = r.events.wait_end(&ids[0]);
+        assert_eq!(skipped.status, "skipped");
+        let err = skipped.error.unwrap();
+        assert_eq!(err.code, ErrorCode::SameFormat);
+        assert_eq!(err.message, "a.png is already PNG.");
+        let done = r.events.wait_end(&ids[1]);
+        assert_eq!(done.status, "done", "{:?}", done.error);
+        assert!(done.out_path.unwrap().ends_with("b.png"));
+        assert_eq!(r.names(), ["a.png", "b.jpg", "b.png"], "no (1) copy");
+        let rec = r.history.lock().unwrap().get(&skipped.job_id).unwrap().unwrap();
+        assert_eq!(rec.status, "skipped");
+        assert_eq!(rec.error_code.as_deref(), Some("SAME_FORMAT"));
+        assert_eq!(skipped.batch_size, 2);
+        assert_eq!(
+            serde_json::to_value(err.code).unwrap(),
+            serde_json::json!("SAME_FORMAT")
+        );
+    }
+
+    #[test]
+    fn extensionless_same_format_output_uses_the_sniffed_extension() {
+        let r = rig();
+        let png = [
+            0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R',
+        ];
+        let src = r.file("photo", &png);
+        let ev = r.run("samecopy", &[src]);
+        assert_eq!(ev.status, "done", "{:?}", ev.error);
+        assert!(
+            ev.out_path.unwrap().ends_with("photo (copy).png"),
+            "extensionless input must not get .bin"
+        );
     }
 
     #[test]

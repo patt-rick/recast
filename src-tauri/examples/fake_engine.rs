@@ -45,6 +45,10 @@ fn main() {
             hang();
         }
         "hang" => hang(),
+        // first instruction: drop a marker file at args[2] (proves the process has run)
+        "marker" => {
+            std::fs::write(&args[2], b"ran").unwrap();
+        }
         // starts a grandchild that hangs, reports its pid, then hangs itself
         "spawn_child" => {
             #[allow(clippy::zombie_processes)] // deliberate: the test needs an orphan grandchild

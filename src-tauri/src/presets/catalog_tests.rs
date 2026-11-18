@@ -33,21 +33,84 @@ fn bundled_catalog_is_valid() {
         .unwrap();
 }
 
-#[test]
-fn video_ring_order_matches_spec() {
-    let c = Catalog::parse(BUNDLED).unwrap();
-    let ids: Vec<&str> = c
+fn labels(kind: Kind) -> Vec<String> {
+    Catalog::parse(BUNDLED)
+        .unwrap()
         .presets
         .iter()
-        .filter(|p| p.kinds.contains(&Kind::Video))
-        .map(|p| p.label.as_str())
-        .collect();
+        .filter(|p| p.kinds.contains(&kind))
+        .map(|p| p.label.clone())
+        .collect()
+}
+
+#[test]
+fn video_ring_order_matches_spec() {
     assert_eq!(
-        ids,
+        labels(Kind::Video),
         [
             "MP3", "MP4", "GIF", "WebM", "Shrink", "M4A", "MKV", "MOV", "Opus", "WAV"
         ]
     );
+}
+
+#[test]
+fn audio_ring_order_matches_spec() {
+    assert_eq!(
+        labels(Kind::Audio),
+        ["MP3", "M4A", "Opus", "FLAC", "WAV", "ALAC", "AIFF", "OGG"]
+    );
+}
+
+#[test]
+fn image_ring_order_matches_spec() {
+    assert_eq!(
+        labels(Kind::Image),
+        [
+            "JPG", "PNG", "WebP", "AVIF", "Shrink", "JPEG XL", "ICO", "TIFF", "PDF", "Combine"
+        ]
+    );
+}
+
+#[test]
+fn pdf_ring_order_matches_spec() {
+    assert_eq!(
+        labels(Kind::Pdf),
+        ["Compress", "Images", "Split", "Merge"]
+    );
+}
+
+#[test]
+fn text_ring_order_matches_spec() {
+    assert_eq!(
+        labels(Kind::Text),
+        ["EPUB", "DOCX", "HTML", "Markdown", "ODT"]
+    );
+}
+
+#[test]
+fn no_snapshot_outlives_its_preset() {
+    let c = Catalog::parse(BUNDLED).unwrap();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/presets/snapshots");
+    let prefix = "recast_lib__presets__catalog_tests__";
+    let mut stale = Vec::new();
+    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(id) = name
+            .strip_prefix(prefix)
+            .and_then(|n| n.strip_suffix(".snap"))
+            && c.get(id).is_none()
+        {
+            stale.push(name);
+        }
+    }
+    assert!(stale.is_empty(), "delete stale snapshots: {stale:?}");
+}
+
+#[test]
+fn stale_snapshot_check_would_notice() {
+    // Guards the guard: the file naming it relies on matches what insta writes.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/presets/snapshots");
+    assert!(dir.join("recast_lib__presets__catalog_tests__video-mp3.snap").is_file());
 }
 
 #[test]
@@ -69,7 +132,7 @@ fn every_preset_argv_snapshot() {
                 }
             })
             .collect();
-        let out_ext = p.out_ext_for(Path::new(&format!("x.{ext}")));
+        let out_ext = p.out_ext_for(Path::new(&format!("x.{ext}")), "");
         let passes = build_command(
             p,
             &BuildInput {
