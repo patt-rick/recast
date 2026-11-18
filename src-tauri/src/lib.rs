@@ -1,3 +1,5 @@
+pub mod detect;
+pub mod fsutil;
 pub mod paths;
 pub mod platform;
 pub mod settings;
