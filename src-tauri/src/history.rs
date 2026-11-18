@@ -111,7 +111,7 @@ impl History {
     pub fn finish(&self, id: &str, f: &Finish, now: i64) -> rusqlite::Result<()> {
         self.conn.execute(
             "UPDATE jobs SET status = ?2, output = ?3, error_code = ?4, error_detail = ?5, stderr_tail = ?6,
-                             ended_at = ?7, temp_path = NULL WHERE id = ?1",
+                             ended_at = ?7 WHERE id = ?1",
             params![id, f.status, f.output, f.error_code, f.error_detail, f.stderr_tail, now],
         )?;
         Ok(())
@@ -136,7 +136,7 @@ impl History {
     pub fn prune(&self, keep: u32) -> rusqlite::Result<()> {
         self.conn.execute(
             &format!(
-                "DELETE FROM jobs WHERE status NOT IN {UNFINISHED}
+                "DELETE FROM jobs WHERE status NOT IN {UNFINISHED} AND temp_path IS NULL
                  AND seq NOT IN (SELECT seq FROM jobs ORDER BY seq DESC LIMIT ?1)"
             ),
             params![keep],
@@ -144,22 +144,30 @@ impl History {
         Ok(())
     }
 
-    /// At startup: unfinished jobs become INTERRUPTED; returns their temp dirs to delete.
+    /// At startup: unfinished jobs become INTERRUPTED. Returns every temp dir still on
+    /// record (theirs, and finished jobs' whose removal failed) to delete; call
+    /// `forget_temp` for each one once it is gone, so a failed delete is retried.
     pub fn recover_interrupted(&self, now: i64) -> rusqlite::Result<Vec<String>> {
         let temps: Vec<String> = {
-            let mut st = self.conn.prepare(&format!("SELECT temp_path FROM jobs WHERE status IN {UNFINISHED} AND temp_path IS NOT NULL"))?;
+            let mut st = self.conn.prepare("SELECT temp_path FROM jobs WHERE temp_path IS NOT NULL ORDER BY seq")?;
             let rows = st.query_map([], |r| r.get(0))?;
             rows.collect::<rusqlite::Result<_>>()?
         };
         self.conn.execute(
             &format!(
                 "UPDATE jobs SET status = 'interrupted', error_code = 'INTERRUPTED',
-                 error_detail = 'Recast closed before this finished.', ended_at = ?1, temp_path = NULL
+                 error_detail = 'Recast closed before this finished.', ended_at = ?1
                  WHERE status IN {UNFINISHED}"
             ),
             params![now],
         )?;
         Ok(temps)
+    }
+
+    /// The temp dir is gone: stop tracking it.
+    pub fn forget_temp(&self, temp: &str) -> rusqlite::Result<()> {
+        self.conn.execute("UPDATE jobs SET temp_path = NULL WHERE temp_path = ?1", params![temp])?;
+        Ok(())
     }
 }
 
@@ -194,11 +202,20 @@ mod tests {
         h.set_temp("a", Some("C:\\x\\.recast-a")).unwrap();
         h.insert("b", "p", &[], 2).unwrap();
         h.finish("b", &Finish { status: "done", ..Default::default() }, 3).unwrap();
-        assert_eq!(h.recover_interrupted(9).unwrap(), vec!["C:\\x\\.recast-a".to_string()]);
+        // a finished job whose temp dir couldn't be removed
+        h.insert("c", "p", &[], 4).unwrap();
+        h.set_temp("c", Some(r"C:\x\.recast-c")).unwrap();
+        h.finish("c", &Finish { status: "done", ..Default::default() }, 5).unwrap();
+        assert_eq!(h.recover_interrupted(9).unwrap(), vec![r"C:\x\.recast-a".to_string(), r"C:\x\.recast-c".to_string()]);
+        assert_eq!(h.get("c").unwrap().unwrap().status, "done");
         let a = h.get("a").unwrap().unwrap();
         assert_eq!(a.status, "interrupted");
         assert_eq!(a.error_code.as_deref(), Some("INTERRUPTED"));
-        assert_eq!(a.temp_path, None);
+        // still tracked until the caller has actually deleted it
+        assert_eq!(a.temp_path.as_deref(), Some(r"C:\x\.recast-a"));
+        h.forget_temp(r"C:\x\.recast-a").unwrap();
+        assert_eq!(h.get("a").unwrap().unwrap().temp_path, None);
+        assert_eq!(h.get("c").unwrap().unwrap().temp_path.as_deref(), Some(r"C:\x\.recast-c"));
         assert_eq!(h.get("b").unwrap().unwrap().status, "done");
     }
 
@@ -212,9 +229,10 @@ mod tests {
                 h.finish(&id, &Finish { status: "done", ..Default::default() }, i).unwrap();
             }
         }
+        h.set_temp("j1", Some(r"C:\x\.recast-j1")).unwrap();
         h.prune(3).unwrap();
         let ids: Vec<String> = h.list(0, 50).unwrap().into_iter().map(|r| r.id).collect();
-        assert_eq!(ids, ["j9", "j8", "j7", "j0"]);
+        assert_eq!(ids, ["j9", "j8", "j7", "j1", "j0"], "a row whose temp dir is still on disk is kept");
     }
 
     #[test]

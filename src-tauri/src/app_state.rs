@@ -1,6 +1,8 @@
 //! Builds everything at startup and hands it to Tauri.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+use crate::lockutil::lock;
 
 use tauri::path::BaseDirectory;
 use tauri::{Emitter, Manager};
@@ -56,10 +58,21 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     let history = Arc::new(Mutex::new(History::open(&paths.db())?));
-    for tmp in history.lock().unwrap().recover_interrupted(now())? {
+    let leftovers = lock(&history).recover_interrupted(now())?;
+    for tmp in leftovers {
+        // Only ever delete Recast's own work folders, whatever the database says.
+        if !is_recast_temp(Path::new(&tmp)) {
+            log::warn!("not deleting {tmp}: not a Recast temp folder");
+            let _ = lock(&history).forget_temp(&tmp);
+            continue;
+        }
         match std::fs::remove_dir_all(&tmp) {
+            // Still tracked, so the next start tries again.
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => log::warn!("leftover {tmp}: {e}"),
-            _ => log::info!("removed leftover temp dir {tmp}"),
+            _ => {
+                log::info!("removed leftover temp dir {tmp}");
+                let _ = lock(&history).forget_temp(&tmp);
+            }
         }
     }
 
@@ -69,11 +82,29 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         catalog.clone(),
         engines.clone(),
         history.clone(),
-        Arc::new(move || for_jobs.lock().unwrap().settings.clone()),
+        Arc::new(move || lock(&for_jobs).settings.clone()),
         Arc::new(TauriEvents::new(app.handle().clone())),
         paths.local.join("tmp"),
     );
 
     app.manage(AppState { paths, settings, catalog, engines, history, jobs, sevenzip_licence });
     Ok(())
+}
+
+/// A job temp dir is always named `.recast-<job id>`.
+fn is_recast_temp(p: &Path) -> bool {
+    p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".recast-"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recovery_only_deletes_recast_temp_dirs() {
+        assert!(is_recast_temp(Path::new(r"C:\Users\x\Videos\.recast-0b1c")));
+        assert!(!is_recast_temp(Path::new(r"C:\Users\x\Videos")));
+        assert!(!is_recast_temp(Path::new(r"C:\")));
+        assert!(!is_recast_temp(Path::new(r"C:\x\.recast-a\..")));
+    }
 }

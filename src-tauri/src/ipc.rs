@@ -8,10 +8,11 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_state::AppState;
-use crate::engines::EngineRow;
+use crate::engines::{EngineRow, ENGINE_BUSY};
 use crate::history::JobRecord;
 use crate::jobs::notify::Notifier;
 use crate::jobs::{Events, JobEvent};
+use crate::lockutil::lock;
 use crate::pad_model::{self, PadModel};
 use crate::settings::{self, Settings};
 
@@ -39,7 +40,7 @@ impl Events for TauriEvents {
         if let Err(e) = self.app.emit(name, ev) {
             log::warn!("emit {name}: {e}");
         }
-        if let Some(n) = self.notifier.lock().unwrap().on_event(ev)
+        if let Some(n) = lock(&self.notifier).on_event(ev)
             && let Err(e) = self.app.notification().builder().title(&n.title).body(&n.body).show() {
                 log::warn!("notification: {e}");
             }
@@ -92,7 +93,7 @@ pub fn retry_job(state: State<'_, AppState>, id: String, fallback: bool) -> Resu
 
 #[tauri::command]
 pub fn list_jobs(state: State<'_, AppState>, page: u32) -> Result<Vec<JobListItem>, String> {
-    let records = state.history.lock().unwrap().list(page, 50).map_err(|e| e.to_string())?;
+    let records = lock(&state.history).list(page, 50).map_err(|e| e.to_string())?;
     Ok(records
         .into_iter()
         .map(|record| JobListItem { preset_label: state.catalog.get(&record.preset_id).map(|p| p.label.clone()).unwrap_or_default(), record })
@@ -104,7 +105,7 @@ pub fn remove_job(state: State<'_, AppState>, id: String) -> Result<(), String> 
     if state.jobs.is_active(&id) {
         return Err("Cancel the job before removing it.".into());
     }
-    state.history.lock().unwrap().remove(&id).map_err(|e| e.to_string())
+    lock(&state.history).remove(&id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -113,11 +114,11 @@ pub async fn engines_list(state: State<'_, AppState>) -> Result<Vec<EngineRow>, 
     blocking(move || Ok(engines.list())).await
 }
 
-const ENGINE_BUSY: &str = "A conversion is using this converter. Try again when it finishes.";
-
 #[tauri::command]
 pub fn engine_install(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    if state.jobs.engine_in_use(&id) {
+    // An early answer for the common case; Engines::install itself refuses (and emits
+    // engine://failed) if a conversion takes the engine in the meantime.
+    if state.engines.in_use(&id) {
         return Err(ENGINE_BUSY.into());
     }
     let engines = state.engines.clone();
@@ -130,9 +131,7 @@ pub fn engine_install(state: State<'_, AppState>, id: String) -> Result<(), Stri
 
 #[tauri::command]
 pub async fn engine_remove(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    if state.jobs.engine_in_use(&id) {
-        return Err(ENGINE_BUSY.into());
-    }
+    // Engines::remove refuses with ENGINE_BUSY while a conversion holds a lease.
     let engines = state.engines.clone();
     blocking(move || engines.remove(&id)).await
 }
@@ -145,12 +144,12 @@ pub async fn engine_verify(state: State<'_, AppState>, id: String) -> Result<boo
 
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Settings {
-    state.settings.lock().unwrap().settings.clone()
+    lock(&state.settings).settings.clone()
 }
 
 #[tauri::command]
 pub fn set_settings(state: State<'_, AppState>, patch: serde_json::Value) -> Result<Settings, String> {
-    let mut current = state.settings.lock().unwrap();
+    let mut current = lock(&state.settings);
     let next = settings::apply_patch(&current, patch);
     for w in &next.warnings {
         log::warn!("settings: {w}");

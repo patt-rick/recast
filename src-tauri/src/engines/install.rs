@@ -1,21 +1,23 @@
 //! Fetch → verify SHA-256 → unpack with 7z → locate bins → smoke check → atomic rename.
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
+use std::ffi::OsString;
 use std::io::{Read, Write};
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use super::manifest::EngineEntry;
 use crate::fsutil::{sha256_file, walk_files};
-use crate::platform;
 
 pub const RECORD: &str = ".recast-install.json";
 pub const DAMAGED: &str = ".recast-damaged";
 pub const CAPS: &str = ".recast-caps.json";
+/// ImageMagick's policy file, next to magick.exe.
+pub const MAGICK_POLICY: &str = "policy.xml";
+/// Unpacking a large engine is slow under antivirus, but never this slow.
+const EXTRACT_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -40,15 +42,24 @@ pub struct InstallRecord {
 }
 
 pub trait Fetcher: Send + Sync {
-    /// Download `url` into `dest`, resuming if `dest` already holds a prefix.
-    fn fetch(&self, url: &str, dest: &Path, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String>;
+    /// Download `url` into `dest`, resuming if `dest` already holds a prefix. Fails
+    /// (and deletes `dest`) once more than `max` bytes would be stored.
+    fn fetch(&self, url: &str, dest: &Path, max: u64, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String>;
 }
 
 pub struct HttpFetcher;
 
 impl Fetcher for HttpFetcher {
-    fn fetch(&self, url: &str, dest: &Path, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String> {
-        let have = fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+    fn fetch(&self, url: &str, dest: &Path, max: u64, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String> {
+        let oversize = || {
+            let _ = fs::remove_file(dest);
+            "the download is larger than expected, so it was stopped".to_string()
+        };
+        let mut have = fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+        if have > max {
+            let _ = fs::remove_file(dest);
+            have = 0;
+        }
         let client = reqwest::blocking::Client::builder()
             .user_agent("Recast")
             .connect_timeout(Duration::from_secs(30))
@@ -74,14 +85,22 @@ impl Fetcher for HttpFetcher {
             return Err(format!("download failed: HTTP {status}"));
         };
         let total = resp.content_length().map(|l| l + done);
+        if total.is_some_and(|t| t > max) {
+            drop(file);
+            return Err(oversize());
+        }
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             let n = resp.read(&mut buf).map_err(|e| e.to_string())?;
             if n == 0 {
                 break;
             }
-            file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
             done += n as u64;
+            if done > max {
+                drop(file);
+                return Err(oversize());
+            }
+            file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
             progress(done, total);
         }
         Ok(())
@@ -94,17 +113,26 @@ pub struct LocalFetcher {
 }
 
 impl Fetcher for LocalFetcher {
-    fn fetch(&self, _url: &str, dest: &Path, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String> {
+    fn fetch(&self, _url: &str, dest: &Path, max: u64, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String> {
+        if fs::metadata(&self.source).map_err(|e| e.to_string())?.len() > max {
+            return Err("the download is larger than expected, so it was stopped".into());
+        }
         let n = fs::copy(&self.source, dest).map_err(|e| e.to_string())?;
         progress(n, Some(n));
         Ok(())
     }
 }
 
+/// A hook run on the unpacked staging folder: (entry, staging dir, install record).
+pub type PostUnpack<'h> = dyn Fn(&EngineEntry, &Path, &InstallRecord) -> Result<(), String> + 'h;
+
 pub struct InstallCtx<'a> {
     pub root: &'a Path,
     pub sevenzip: &'a Path,
     pub fetcher: &'a dyn Fetcher,
+    /// Runs on the unpacked staging folder before the atomic rename; an error fails
+    /// the install and nothing is installed.
+    pub post_unpack: Option<&'a PostUnpack<'a>>,
 }
 
 pub fn install(entry: &EngineEntry, ctx: &InstallCtx, progress: &mut dyn FnMut(f32)) -> Result<InstallRecord, String> {
@@ -116,7 +144,8 @@ pub fn install(entry: &EngineEntry, ctx: &InstallCtx, progress: &mut dyn FnMut(f
 
     let result = (|| {
         let size = entry.size.max(1);
-        ctx.fetcher.fetch(&entry.url, &archive, &mut |done, total| {
+        let max = if entry.size == 0 { u64::MAX } else { entry.size };
+        ctx.fetcher.fetch(&entry.url, &archive, max, &mut |done, total| {
             progress((done as f32 / total.unwrap_or(size).max(1) as f32).min(1.0) * 0.85)
         })?;
         let digest = sha256_file(&archive).map_err(|e| e.to_string())?;
@@ -130,9 +159,12 @@ pub fn install(entry: &EngineEntry, ctx: &InstallCtx, progress: &mut dyn FnMut(f
         let record = locate_bins(entry, &staging)?;
         fs::write(staging.join(RECORD), serde_json::to_vec_pretty(&record).unwrap()).map_err(|e| e.to_string())?;
         if let Some((bin, args)) = entry.check.split_first() {
-            let exe = staging.join(&record.bins[bin].rel);
+            let exe = staging.join(&record.bins.get(bin).ok_or_else(|| format!("{}: check names unknown program {bin}", entry.name))?.rel);
             crate::proc::run_capture(&exe, args, Duration::from_secs(30))
                 .ok_or_else(|| format!("{} didn't start after unpacking", entry.name))?;
+        }
+        if let Some(hook) = ctx.post_unpack {
+            hook(entry, &staging, &record)?;
         }
         let engine_dir = ctx.root.join(&entry.id);
         let final_dir = engine_dir.join(&entry.version);
@@ -154,24 +186,23 @@ pub fn install(entry: &EngineEntry, ctx: &InstallCtx, progress: &mut dyn FnMut(f
     let _ = fs::remove_dir_all(&staging);
     if result.is_ok() {
         let _ = fs::remove_dir_all(&work);
+    } else {
+        // Only succeeds if empty: an older working version stays.
+        let _ = fs::remove_dir(ctx.root.join(&entry.id));
     }
     // On a network failure the partial archive stays in .partial so the next attempt resumes.
     result
 }
 
 fn extract(sevenzip: &Path, archive: &Path, dest: &Path) -> Result<(), String> {
-    let out = Command::new(sevenzip)
-        .arg("x")
-        .arg("-y")
-        .arg(format!("-o{}", dest.display()))
-        .arg(archive)
-        .creation_flags(platform::CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("couldn't run 7-Zip: {e}"))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(format!("unpacking failed: {}", String::from_utf8_lossy(&out.stderr).trim()))
+    let mut out_arg = OsString::from("-o");
+    out_arg.push(dest);
+    let args = [OsString::from("x"), OsString::from("-y"), out_arg, archive.as_os_str().to_owned()];
+    let c = crate::proc::run_full(sevenzip, args, &[], EXTRACT_TIMEOUT).map_err(|e| format!("couldn't run 7-Zip: {e}"))?;
+    match c.status {
+        Some(st) if st.success() => Ok(()),
+        Some(_) => Err(format!("unpacking failed: {}", String::from_utf8_lossy(&c.stderr).trim())),
+        None => Err("unpacking took too long, so it was stopped".into()),
     }
 }
 
@@ -206,7 +237,13 @@ pub fn read_status(entry: &EngineEntry, root: &Path) -> EngineStatus {
         None if root.join(&entry.id).exists() => EngineStatus::Damaged,
         None => EngineStatus::NotInstalled,
         Some((dir, rec)) => {
-            if dir.join(DAMAGED).exists() || rec.bins.values().any(|b| !dir.join(&b.rel).is_file()) {
+            // ImageMagick is only safe to run with Recast's policy, and its presets
+            // depend on the recorded capabilities.
+            let magick_incomplete = entry.capabilities.as_deref() == Some("magick_formats") && {
+                let policy = rec.bins.get("magick").and_then(|b| dir.join(&b.rel).parent().map(|p| p.join(MAGICK_POLICY)));
+                !dir.join(CAPS).is_file() || !policy.is_some_and(|p| p.is_file())
+            };
+            if magick_incomplete || dir.join(DAMAGED).exists() || rec.bins.values().any(|b| !dir.join(&b.rel).is_file()) {
                 EngineStatus::Damaged
             } else {
                 EngineStatus::Installed { update_available: rec.version != entry.version, version: rec.version }
@@ -286,7 +323,7 @@ pub(crate) mod tests {
         let e = entry(&zip, "1.0");
         let root = d.path().join("engines");
         let fetcher = LocalFetcher { source: zip.clone() };
-        let ctx = InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher };
+        let ctx = InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: None };
         let mut seen = Vec::new();
         let rec = install(&e, &ctx, &mut |p| seen.push(p)).unwrap();
         assert_eq!(rec.bins["tool"].rel, r"tool\bin\tool.exe");
@@ -306,7 +343,7 @@ pub(crate) mod tests {
         e.sha256 = "0".repeat(64);
         let root = d.path().join("engines");
         let fetcher = LocalFetcher { source: zip };
-        let err = install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher }, &mut |_| {}).unwrap_err();
+        let err = install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: None }, &mut |_| {}).unwrap_err();
         assert!(err.contains("checksum"), "{err}");
         assert!(!root.join("tool").exists());
         assert!(crate::fsutil::walk_files(&root).is_empty(), "the bad download must be deleted");
@@ -321,7 +358,7 @@ pub(crate) mod tests {
         e.check = vec!["tool".into(), "-v".into()];
         let root = d.path().join("engines");
         let fetcher = LocalFetcher { source: zip };
-        assert!(install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher }, &mut |_| {}).is_err());
+        assert!(install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: None }, &mut |_| {}).is_err());
         assert!(!root.join("tool").exists());
     }
 
@@ -332,12 +369,83 @@ pub(crate) mod tests {
         let e = entry(&zip, "1.0");
         let root = d.path().join("engines");
         let fetcher = LocalFetcher { source: zip };
-        install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher }, &mut |_| {}).unwrap();
+        install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: None }, &mut |_| {}).unwrap();
         assert!(verify(&e, &root).unwrap());
         fs::write(root.join("tool").join("1.0").join(r"tool\bin\tool.exe"), b"tampered").unwrap();
         assert!(!verify(&e, &root).unwrap());
         assert_eq!(read_status(&e, &root), EngineStatus::Damaged);
         remove(&e, &root).unwrap();
         assert_eq!(read_status(&e, &root), EngineStatus::NotInstalled);
+    }
+
+    #[test]
+    fn oversized_download_installs_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let zip = make_archive(d.path());
+        let mut e = entry(&zip, "1.0");
+        e.size -= 1;
+        let root = d.path().join("engines");
+        let fetcher = LocalFetcher { source: zip };
+        let err = install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: None }, &mut |_| {}).unwrap_err();
+        assert!(err.contains("larger than expected"), "{err}");
+        assert_eq!(read_status(&e, &root), EngineStatus::NotInstalled);
+    }
+
+    #[test]
+    fn post_unpack_runs_on_staging_before_the_rename() {
+        let d = tempfile::tempdir().unwrap();
+        let zip = make_archive(d.path());
+        let e = entry(&zip, "1.0");
+        let root = d.path().join("engines");
+        let fetcher = LocalFetcher { source: zip };
+        let final_dir = root.join("tool").join("1.0");
+        let hook = |_: &EngineEntry, staging: &Path, rec: &InstallRecord| -> Result<(), String> {
+            assert!(!final_dir.exists(), "the hook runs before the rename");
+            assert!(staging.join(&rec.bins["tool"].rel).is_file());
+            fs::write(staging.join("hook.txt"), b"x").map_err(|e| e.to_string())
+        };
+        install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: Some(&hook) }, &mut |_| {}).unwrap();
+        assert!(final_dir.join("hook.txt").is_file());
+    }
+
+    #[test]
+    fn failing_post_unpack_installs_nothing() {
+        let d = tempfile::tempdir().unwrap();
+        let zip = make_archive(d.path());
+        let e = entry(&zip, "1.0");
+        let root = d.path().join("engines");
+        let fetcher = LocalFetcher { source: zip };
+        let hook = |_: &EngineEntry, _: &Path, _: &InstallRecord| -> Result<(), String> { Err("no policy".into()) };
+        let err = install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: Some(&hook) }, &mut |_| {}).unwrap_err();
+        assert_eq!(err, "no policy");
+        assert!(!root.join("tool").exists());
+        assert_eq!(read_status(&e, &root), EngineStatus::NotInstalled);
+    }
+
+    #[test]
+    fn magick_install_without_policy_or_caps_is_damaged() {
+        let d = tempfile::tempdir().unwrap();
+        let zip = make_archive(d.path());
+        let mut e = entry(&zip, "1.0");
+        e.capabilities = Some("magick_formats".into());
+        e.bins = BTreeMap::from([("magick".to_string(), "tool.exe".to_string())]);
+        let root = d.path().join("engines");
+        let fetcher = LocalFetcher { source: zip };
+        let hook = |_: &EngineEntry, staging: &Path, rec: &InstallRecord| -> Result<(), String> {
+            let exe_dir = staging.join(&rec.bins["magick"].rel).parent().unwrap().to_path_buf();
+            fs::write(exe_dir.join(MAGICK_POLICY), b"<policymap/>").unwrap();
+            fs::write(staging.join(CAPS), b"[]").unwrap();
+            Ok(())
+        };
+        install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: Some(&hook) }, &mut |_| {}).unwrap();
+        let installed = EngineStatus::Installed { version: "1.0".into(), update_available: false };
+        assert_eq!(read_status(&e, &root), installed);
+        let dir = root.join("tool").join("1.0");
+        let policy = dir.join(r"tool\bin").join(MAGICK_POLICY);
+        fs::rename(dir.join(CAPS), dir.join("caps.bak")).unwrap();
+        assert_eq!(read_status(&e, &root), EngineStatus::Damaged, "caps missing");
+        fs::rename(dir.join("caps.bak"), dir.join(CAPS)).unwrap();
+        fs::remove_file(&policy).unwrap();
+        assert_eq!(read_status(&e, &root), EngineStatus::Damaged, "policy missing");
     }
 }

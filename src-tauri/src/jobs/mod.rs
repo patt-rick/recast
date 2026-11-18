@@ -8,6 +8,7 @@ pub mod runner;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -15,7 +16,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::detect::{ext_of, Probe};
+pub use crate::engines::EngineLease;
 use crate::history::{Finish, History};
+use crate::lockutil::lock;
 use crate::platform;
 use crate::presets::command::{build_command, expand, BuildInput};
 use crate::presets::{naming, pandoc_reader, Catalog, Preset, ProgressKind};
@@ -90,6 +93,8 @@ pub trait Events: Send + Sync {
 pub trait EngineHost: Send + Sync {
     fn is_installed(&self, engine: &str) -> bool;
     fn ensure(&self, engine: &str, progress: &mut dyn FnMut(f32)) -> Result<(), String>;
+    /// Shared use of the engine: it can't be removed or replaced while the lease lives.
+    fn acquire(&self, engine: &str) -> EngineLease;
     fn bin(&self, engine: &str, bin: &str) -> Option<PathBuf>;
     fn probe(&self, path: &Path) -> Option<Probe>;
     fn pdf_pages(&self, path: &Path) -> Option<u32>;
@@ -126,8 +131,6 @@ impl Job {
 struct State {
     queue: VecDeque<Job>,
     running: HashMap<String, CancelToken>,
-    /// job id → engine id, for jobs in `running`.
-    running_engines: HashMap<String, String>,
 }
 
 struct Inner {
@@ -164,17 +167,38 @@ impl Failure {
 }
 
 /// Deletes the job's temp dir however the job ends (outputs are moved out first).
-struct TmpGuard(PathBuf);
+/// History forgets the dir only once it is gone, so startup recovery retries otherwise.
+struct TmpGuard {
+    dir: PathBuf,
+    history: Arc<Mutex<History>>,
+    job_id: String,
+}
 
 impl Drop for TmpGuard {
     fn drop(&mut self) {
         for _ in 0..10 {
-            match fs::remove_dir_all(&self.0) {
+            match fs::remove_dir_all(&self.dir) {
                 Err(e) if e.kind() != io::ErrorKind::NotFound => std::thread::sleep(Duration::from_millis(100)),
-                _ => return,
+                _ => {
+                    let _ = lock(&self.history).set_temp(&self.job_id, None);
+                    return;
+                }
             }
         }
-        log::warn!("couldn't remove temp dir {}", self.0.display());
+        log::warn!("couldn't remove temp dir {}", self.dir.display());
+    }
+}
+
+/// Frees the job's concurrency slot and starts the next job, even if the job panicked.
+struct Slot {
+    inner: Arc<Inner>,
+    job_id: String,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        lock(&self.inner.state).running.remove(&self.job_id);
+        Inner::pump(&self.inner);
     }
 }
 
@@ -200,24 +224,18 @@ impl JobManager {
         Inner::pump(&self.inner);
     }
 
-    /// Is a running job using this engine? (Library refuses Remove/Repair/Update then.)
-    pub fn engine_in_use(&self, engine: &str) -> bool {
-        let st = self.inner.state.lock().unwrap();
-        st.running_engines.values().any(|e| e == engine)
-    }
-
     pub fn retry(&self, id: &str, fallback: bool) -> Result<Vec<String>, String> {
-        let rec = self.inner.history.lock().unwrap().get(id).map_err(|e| e.to_string())?.ok_or("That job is no longer in the list.")?;
+        let rec = lock(&self.inner.history).get(id).map_err(|e| e.to_string())?.ok_or("That job is no longer in the list.")?;
         let paths: Vec<PathBuf> = rec.inputs.iter().map(PathBuf::from).collect();
         self.enqueue(&rec.preset_id, &paths, fallback)
     }
 
     pub fn cancel(&self, id: &str) {
-        let mut st = self.inner.state.lock().unwrap();
+        let mut st = lock(&self.inner.state);
         if let Some(pos) = st.queue.iter().position(|j| j.id == id) {
             let job = st.queue.remove(pos).expect("position is valid");
             drop(st);
-            let _ = self.inner.history.lock().unwrap().finish(
+            let _ = lock(&self.inner.history).finish(
                 &job.id,
                 &Finish { status: "cancelled", error_code: Some("CANCELLED"), ..Default::default() },
                 now(),
@@ -229,7 +247,7 @@ impl JobManager {
     }
 
     pub fn is_active(&self, id: &str) -> bool {
-        let st = self.inner.state.lock().unwrap();
+        let st = lock(&self.inner.state);
         st.running.contains_key(id) || st.queue.iter().any(|j| j.id == id)
     }
 
@@ -246,10 +264,10 @@ impl JobManager {
         for inputs in groups {
             let job = Job { id: uuid::Uuid::new_v4().to_string(), batch_id: batch_id.clone(), batch_size, preset_id: preset_id.to_string(), inputs, fallback };
             let inputs_str: Vec<String> = job.inputs.iter().map(|p| p.to_string_lossy().into_owned()).collect();
-            self.inner.history.lock().unwrap().insert(&job.id, preset_id, &inputs_str, now()).map_err(|e| e.to_string())?;
+            lock(&self.inner.history).insert(&job.id, preset_id, &inputs_str, now()).map_err(|e| e.to_string())?;
             self.inner.emit(&job, "queued", None, None, None, None);
             ids.push(job.id.clone());
-            self.inner.state.lock().unwrap().queue.push_back(job);
+            lock(&self.inner.state).queue.push_back(job);
         }
         Inner::pump(&self.inner);
         Ok(ids)
@@ -261,29 +279,43 @@ impl Inner {
         loop {
             let limit = (this.settings)().jobs.concurrency.max(1) as usize;
             let (job, token) = {
-                let mut st = this.state.lock().unwrap();
+                let mut st = lock(&this.state);
                 if st.running.len() >= limit {
                     return;
                 }
                 let Some(job) = st.queue.pop_front() else { return };
                 let token = CancelToken::default();
                 st.running.insert(job.id.clone(), token.clone());
-                if let Some(p) = this.catalog.get(&job.preset_id) {
-                    st.running_engines.insert(job.id.clone(), p.engine.clone());
-                }
                 (job, token)
             };
             let me = this.clone();
             std::thread::spawn(move || {
-                me.execute(&job, &token);
-                {
-                    let mut st = me.state.lock().unwrap();
-                    st.running.remove(&job.id);
-                    st.running_engines.remove(&job.id);
+                let _slot = Slot { inner: me.clone(), job_id: job.id.clone() };
+                if catch_unwind(AssertUnwindSafe(|| me.execute(&job, &token))).is_err() {
+                    me.internal_error(&job);
                 }
-                Inner::pump(&me);
             });
         }
+    }
+
+    /// A bug panicked the job thread: record the job as failed rather than leaving it
+    /// "running" forever.
+    fn internal_error(&self, job: &Job) {
+        log::error!("job {} ({}) panicked", job.id, job.preset_id);
+        let h = lock(&self.history);
+        // A panic after the result was recorded (e.g. while notifying) changes nothing.
+        let status = h.get(&job.id).ok().flatten().map(|r| r.status).unwrap_or_default();
+        if matches!(status.as_str(), "done" | "skipped" | "failed" | "cancelled") {
+            return;
+        }
+        let message = "Recast hit an internal error.";
+        let _ = h.finish(
+            &job.id,
+            &Finish { status: "failed", error_code: Some(ErrorCode::EngineFailed.as_str()), error_detail: Some(message), ..Default::default() },
+            now(),
+        );
+        drop(h);
+        self.emit(job, "failed", None, None, None, Some(JobError { code: ErrorCode::EngineFailed, message: message.into() }));
     }
 
     fn emit(&self, job: &Job, status: &str, pct: Option<f32>, eta: Option<f64>, out: Option<String>, error: Option<JobError>) {
@@ -303,7 +335,7 @@ impl Inner {
     }
 
     fn execute(&self, job: &Job, cancel: &CancelToken) {
-        let started = Instant::now();
+        let mut started = Instant::now();
         let mut last_emit = Instant::now() - Duration::from_secs(1);
         let mut last_status = String::new();
         let mut progress = |status: &str, pct: Option<f32>| {
@@ -312,8 +344,12 @@ impl Inner {
                 return;
             }
             if changed {
-                let _ = self.history.lock().unwrap().set_status(&job.id, status);
+                let _ = lock(&self.history).set_status(&job.id, status);
                 last_status = status.to_string();
+                if status == "running" {
+                    // The ETA covers the conversion, not the engine download before it.
+                    started = Instant::now();
+                }
             }
             last_emit = Instant::now();
             let eta = (status == "running")
@@ -325,7 +361,7 @@ impl Inner {
         };
         progress("running", Some(0.0));
         let result = self.run_job(job, cancel, &mut progress);
-        let h = self.history.lock().unwrap();
+        let h = lock(&self.history);
         match result {
             Ok(Finished::Done(out)) => {
                 let o = out.to_string_lossy().into_owned();
@@ -359,7 +395,7 @@ impl Inner {
                 self.emit(job, status, None, None, None, Some(f.error));
             }
         }
-        let _ = self.history.lock().unwrap().prune(500);
+        let _ = lock(&self.history).prune(500);
     }
 
     fn dest_dir(&self, s: &Settings, job: &Job) -> Result<PathBuf, Failure> {
@@ -378,21 +414,32 @@ impl Inner {
         Ok(dir)
     }
 
-    /// Install the engine on a helper thread so a cancelled job stops waiting at once.
-    /// The install itself carries on (another job, or the next drop, will want it).
-    fn ensure_engine(&self, engine: &str, cancel: &CancelToken, progress: &mut dyn FnMut(&str, Option<f32>)) -> Result<(), Failure> {
+    /// Install the engine and take a lease on it, on a helper thread so a cancelled
+    /// job stops waiting at once. The install itself carries on (another job, or the
+    /// next drop, will want it); a lease that arrives after cancel is dropped unused.
+    fn ensure_engine(&self, engine: &str, cancel: &CancelToken, progress: &mut dyn FnMut(&str, Option<f32>)) -> Result<EngineLease, Failure> {
         enum Msg {
             Pct(f32),
-            Done(Result<(), String>),
+            Done(Result<EngineLease, String>),
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let host = self.host.clone();
         let id = engine.to_string();
         std::thread::spawn(move || {
             let tx2 = tx.clone();
-            let r = host.ensure(&id, &mut |p| {
-                let _ = tx2.send(Msg::Pct(p));
-            });
+            let r = (|| {
+                // Library may remove the engine between ensure and acquire: try again.
+                for _ in 0..3 {
+                    host.ensure(&id, &mut |p| {
+                        let _ = tx2.send(Msg::Pct(p));
+                    })?;
+                    let lease = host.acquire(&id);
+                    if host.is_installed(&id) {
+                        return Ok(lease);
+                    }
+                }
+                Err("the converter was removed while Recast was getting it ready".to_string())
+            })();
             let _ = tx.send(Msg::Done(r));
         });
         loop {
@@ -401,7 +448,7 @@ impl Inner {
             }
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(Msg::Pct(p)) => progress("waiting_engine", Some(p)),
-                Ok(Msg::Done(Ok(()))) => return Ok(()),
+                Ok(Msg::Done(Ok(lease))) => return Ok(lease),
                 Ok(Msg::Done(Err(e))) => {
                     return Err(Failure::new(ErrorCode::EngineInstallFailed, format!("Couldn't download the converter: {e}")))
                 }
@@ -433,7 +480,8 @@ impl Inner {
         if !self.host.is_installed(&preset.engine) {
             progress("waiting_engine", Some(0.0));
         }
-        self.ensure_engine(&preset.engine, cancel, progress)?;
+        // Held until the job ends, so Library can't remove or replace the engine mid-run.
+        let _lease = self.ensure_engine(&preset.engine, cancel, progress)?;
         let program = self
             .host
             .bin(&preset.engine, &preset.bin)
@@ -471,9 +519,9 @@ impl Inner {
         // 7. Hidden temp dir on the destination volume
         let tmp = tmp_dir_for(&dest, &job.id, &self.scratch)?;
         fs::create_dir_all(&tmp).map_err(|e| Failure::new(DestUnwritable, format!("Couldn't create a work folder: {e}")))?;
-        let _guard = TmpGuard(tmp.clone());
+        let _ = lock(&self.history).set_temp(&job.id, Some(&tmp.to_string_lossy()));
+        let _guard = TmpGuard { dir: tmp.clone(), history: self.history.clone(), job_id: job.id.clone() };
         let _ = platform::set_hidden(&tmp);
-        let _ = self.history.lock().unwrap().set_temp(&job.id, Some(&tmp.to_string_lossy()));
 
         let out_ext = preset.out_ext_for(first);
         // A name is taken if it exists, or if one of its extra outputs (e.g. Markdown's
@@ -502,6 +550,8 @@ impl Inner {
 
         // 8. Run every pass
         let n = passes.len();
+        // ImageMagick reads Recast's policy.xml only through MAGICK_CONFIGURE_PATH.
+        let env = if preset.engine == "imagemagick" { crate::engines::magick_env(&program) } else { Vec::new() };
         for (i, args) in passes.into_iter().enumerate() {
             let spec = RunSpec {
                 program: program.clone(),
@@ -511,6 +561,7 @@ impl Inner {
                 duration_s: duration,
                 stall: Duration::from_secs(settings.jobs.stall_timeout_s as u64),
                 hard_cap: Duration::from_secs(settings.jobs.no_progress_cap_min as u64 * 60 * job.inputs.len() as u64),
+                env: env.clone(),
             };
             let res = runner::run(&spec, cancel, &mut |p| progress("running", Some((i as f32 + p) / n as f32)))
                 .map_err(|e| Failure::new(EngineFailed, format!("Couldn't start the converter: {e}")))?;
@@ -538,16 +589,31 @@ impl Inner {
         if preset.discard_if_not_smaller && fs::metadata(&produced).map(|m| m.len()).unwrap_or(u64::MAX) >= total_size {
             return Ok(Finished::Skipped(format!("{} is already as small as it gets.", file_name(first))));
         }
-        let final_path = finalize(&produced, &dest, first, preset, &out_ext, &taken)?;
-        for extra in &preset.extra_outputs {
-            let name = expand(extra, &vars).map_err(|e| Failure::new(EngineFailed, e))?;
-            let src = tmp.join(&name);
-            if src.exists() {
-                let target = naming::unique_path(&dest, &name, None, &|p| p.exists());
-                move_with_retry(&src, &target).map_err(map_move_err)?;
+        // Extra outputs (e.g. "<stem>_media") first: if anything fails they're moved
+        // back into the temp dir, so a failure never leaves a half-finished result.
+        let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let result = (|| {
+            for extra in &preset.extra_outputs {
+                let name = expand(extra, &vars).map_err(|e| Failure::new(EngineFailed, e))?;
+                let src = tmp.join(&name);
+                if src.exists() {
+                    let target = naming::unique_path(&dest, &name, None, &|p| p.exists());
+                    move_with_retry(&src, &target).map_err(map_move_err)?;
+                    moved.push((src, target));
+                }
+            }
+            // The extras we just moved belong to `planned`: they don't make it taken.
+            let taken_now = |p: &Path| if p == planned { p.exists() } else { taken(p) };
+            finalize(&produced, &dest, first, preset, &out_ext, &taken_now)
+        })();
+        if result.is_err() {
+            for (src, target) in moved.iter().rev() {
+                if let Err(e) = platform::move_no_replace(target, src) {
+                    log::warn!("couldn't take back {}: {e}", target.display());
+                }
             }
         }
-        Ok(Finished::Done(final_path))
+        result.map(Finished::Done)
     }
 }
 
@@ -607,6 +673,25 @@ fn map_move_err(e: io::Error) -> Failure {
     }
 }
 
+/// Can a new file be created in `dir` right now?
+fn dir_accepts_files(dir: &Path) -> bool {
+    let probe = dir.join(format!(".recast-probe-{}", uuid::Uuid::new_v4()));
+    match fs::File::create_new(&probe) {
+        Ok(f) => {
+            drop(f);
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Access denied is a scanner's brief hold only while the folder still takes new
+/// files; otherwise it is a permissions problem and retrying won't help.
+fn access_denied_is_transient(to: &Path) -> bool {
+    to.parent().is_some_and(dir_accepts_files)
+}
+
 /// Antivirus/OneDrive/Dropbox briefly lock new files: retry 100 ms, doubling, ≤ 5 s total.
 fn move_with_retry(from: &Path, to: &Path) -> io::Result<()> {
     let mut wait = 100u64;
@@ -614,6 +699,10 @@ fn move_with_retry(from: &Path, to: &Path) -> io::Result<()> {
     loop {
         match platform::move_no_replace(from, to) {
             Ok(()) => return Ok(()),
+            // Without the raw code, map_move_err reports DEST_UNWRITABLE.
+            Err(e) if e.raw_os_error() == Some(5) && !access_denied_is_transient(to) => {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, e.to_string()))
+            }
             Err(e) if platform::is_transient_lock(&e) && waited < 5000 => {
                 let d = wait.min(5000 - waited);
                 std::thread::sleep(Duration::from_millis(d));
@@ -631,6 +720,9 @@ impl EngineHost for crate::engines::Engines {
     }
     fn ensure(&self, engine: &str, progress: &mut dyn FnMut(f32)) -> Result<(), String> {
         crate::engines::Engines::ensure(self, engine, progress)
+    }
+    fn acquire(&self, engine: &str) -> EngineLease {
+        crate::engines::Engines::acquire(self, engine)
     }
     fn bin(&self, engine: &str, bin: &str) -> Option<PathBuf> {
         crate::engines::Engines::bin(self, engine, bin)
@@ -752,23 +844,118 @@ discard_if_not_smaller = true
 out_ext = "same"
 out_naming = "suffix:compressed"
 passes = [['write_out', '{out}', '100000']]
+
+[[preset]]
+id = "shrink"
+label = "Shrink"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "fake"
+bin = "fake"
+progress = "ffmpeg"
+keep_same_format = true
+out_ext = "same"
+out_naming = "suffix:small"
+passes = [['write_out', '{out}', '{video_kbps}']]
+
+[[preset]]
+id = "diskfull"
+label = "Disk full"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "fake"
+bin = "fake"
+out_ext = "txt"
+out_naming = "replace_ext"
+passes = [['disk_full']]
+
+[[preset]]
+id = "md"
+label = "Markdown"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "fake"
+bin = "fake"
+out_ext = "md"
+out_naming = "replace_ext"
+extra_outputs = ['{final_stem}_media']
+passes = [['write_media', '{out}', '{final_stem}_media']]
+
+[[preset]]
+id = "boom"
+label = "Boom"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "boom"
+bin = "fake"
+out_ext = "txt"
+out_naming = "replace_ext"
+passes = [['ok', '{out}']]
+
+[[preset]]
+id = "broken"
+label = "Broken"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "broken"
+bin = "fake"
+out_ext = "txt"
+out_naming = "replace_ext"
+passes = [['ok', '{out}']]
+
+[[preset]]
+id = "slowdl"
+label = "Slow download"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "slowdl"
+bin = "fake"
+out_ext = "txt"
+out_naming = "replace_ext"
+passes = [['ok', '{out}']]
 "#;
 
+    /// Engines: "fake" works; "boom" panics in bin(); "broken" fails to install;
+    /// "slowdl" takes seconds to install.
     struct FakeHost {
         exe: PathBuf,
+        duration_s: f64,
+        slow_done: std::sync::atomic::AtomicBool,
     }
     impl EngineHost for FakeHost {
-        fn is_installed(&self, _: &str) -> bool {
-            true
+        fn is_installed(&self, engine: &str) -> bool {
+            match engine {
+                "broken" => false,
+                "slowdl" => self.slow_done.load(std::sync::atomic::Ordering::SeqCst),
+                _ => true,
+            }
         }
-        fn ensure(&self, _: &str, _: &mut dyn FnMut(f32)) -> Result<(), String> {
-            Ok(())
+        fn ensure(&self, engine: &str, _: &mut dyn FnMut(f32)) -> Result<(), String> {
+            match engine {
+                "broken" => Err("network down".into()),
+                "slowdl" => {
+                    std::thread::sleep(Duration::from_secs(5));
+                    self.slow_done.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                }
+                _ => Ok(()),
+            }
         }
-        fn bin(&self, _: &str, _: &str) -> Option<PathBuf> {
+        fn acquire(&self, _: &str) -> EngineLease {
+            EngineLease::noop()
+        }
+        fn bin(&self, engine: &str, _: &str) -> Option<PathBuf> {
+            assert_ne!(engine, "boom", "simulated bug");
             Some(self.exe.clone())
         }
         fn probe(&self, _: &Path) -> Option<Probe> {
-            Some(Probe { duration_s: Some(1.0), has_audio: true, has_video: true, audio_codec: None })
+            Some(Probe { duration_s: Some(self.duration_s), has_audio: true, has_video: true, audio_codec: None })
         }
         fn pdf_pages(&self, _: &Path) -> Option<u32> {
             None
@@ -817,6 +1004,9 @@ passes = [['write_out', '{out}', '100000']]
     }
 
     fn rig_with(f: impl FnOnce(&mut Settings)) -> Rig {
+        rig_full(f, 1.0)
+    }
+    fn rig_full(f: impl FnOnce(&mut Settings), duration_s: f64) -> Rig {
         let mut s = Settings::default();
         f(&mut s);
         let events = Arc::new(Collect::default());
@@ -824,7 +1014,7 @@ passes = [['write_out', '{out}', '100000']]
         let scratch = tempfile::tempdir().unwrap();
         let mgr = JobManager::new(
             Arc::new(Catalog::parse(CATALOG).unwrap()),
-            Arc::new(FakeHost { exe: fake_engine() }),
+            Arc::new(FakeHost { exe: fake_engine(), duration_s, slow_done: Default::default() }),
             history.clone(),
             Arc::new(move || s.clone()),
             events.clone(),
@@ -982,6 +1172,172 @@ passes = [['write_out', '{out}', '100000']]
         let again = r.mgr.retry(&first.job_id, true).unwrap().remove(0);
         let ev = r.events.wait_end(&again);
         assert!(PathBuf::from(ev.out_path.unwrap()).starts_with(fallback.path()));
+    }
+
+    #[test]
+    fn a_panicking_job_fails_and_frees_its_slot() {
+        let r = rig_with(|s| s.jobs.concurrency = 1);
+        let a = r.file("a.bin", b"a");
+        let b = r.file("b.bin", b"b");
+        let ev = r.run("boom", &[a]);
+        assert_eq!(ev.status, "failed");
+        let err = ev.error.unwrap();
+        assert_eq!(err.code, ErrorCode::EngineFailed);
+        assert_eq!(err.message, "Recast hit an internal error.");
+        let rec = r.history.lock().unwrap().get(&ev.job_id).unwrap().unwrap();
+        assert_eq!(rec.status, "failed");
+        assert_eq!(rec.error_code.as_deref(), Some("ENGINE_FAILED"));
+        assert!(!r.mgr.is_active(&ev.job_id));
+        assert_eq!(r.run("ok", &[b]).status, "done", "the slot was freed");
+    }
+
+    #[test]
+    fn target_too_small_for_a_long_video() {
+        let r = rig_full(|s| s.shrink.target_mb = 25, 3600.0);
+        let src = r.dir.path().join("long.mp4");
+        fs::File::create(&src).unwrap().set_len(26 * MB).unwrap();
+        let ev = r.run("shrink", &[src]);
+        assert_eq!(ev.status, "failed");
+        let err = ev.error.unwrap();
+        assert_eq!(err.code, ErrorCode::TargetTooSmall);
+        assert!(err.message.starts_with("25 MB is too small"), "{}", err.message);
+        assert_eq!(r.names(), ["long.mp4"]);
+    }
+
+    #[test]
+    fn shrink_skips_a_file_already_under_the_target() {
+        let r = rig_with(|s| s.shrink.target_mb = 25);
+        let src = r.file("small.mp4", b"tiny");
+        let ev = r.run("shrink", &[src]);
+        assert_eq!(ev.status, "skipped");
+        let err = ev.error.unwrap();
+        assert_eq!(err.code, ErrorCode::AlreadySmall);
+        assert_eq!(err.message, "small.mp4 is already under 25 MB.");
+        assert_eq!(r.names(), ["small.mp4"]);
+    }
+
+    #[test]
+    fn engine_install_failure_is_reported() {
+        let r = rig();
+        let src = r.file("a.bin", b"a");
+        let ev = r.run("broken", &[src]);
+        assert_eq!(ev.status, "failed");
+        let err = ev.error.unwrap();
+        assert_eq!(err.code, ErrorCode::EngineInstallFailed);
+        assert!(err.message.contains("network down"), "{}", err.message);
+        assert!(r.events.index_of(&ev.job_id, "waiting_engine") < r.events.index_of(&ev.job_id, "failed"));
+    }
+
+    #[test]
+    fn cancel_while_waiting_for_an_engine_download() {
+        let r = rig();
+        let src = r.file("a.bin", b"a");
+        let id = r.mgr.start_jobs("slowdl", &[src]).unwrap().remove(0);
+        r.events.wait_for(&id, &["waiting_engine"]);
+        let t = Instant::now();
+        r.mgr.cancel(&id);
+        assert_eq!(r.events.wait_end(&id).status, "cancelled");
+        assert!(t.elapsed() < Duration::from_secs(2), "cancel must not wait for the download");
+        assert_eq!(r.names(), ["a.bin"]);
+    }
+
+    #[test]
+    fn disk_full_in_engine_output_is_disk_full() {
+        let r = rig();
+        let src = r.file("a.bin", b"a");
+        let ev = r.run("diskfull", &[src]);
+        assert_eq!(ev.status, "failed");
+        let err = ev.error.unwrap();
+        assert_eq!(err.code, ErrorCode::DiskFull);
+        assert_eq!(err.message, "The disk is full.");
+    }
+
+    #[test]
+    fn extra_outputs_land_beside_the_main_output() {
+        let r = rig();
+        let src = r.file("notes.docx", b"doc");
+        let ev = r.run("md", &[src]);
+        assert_eq!(ev.status, "done", "{:?}", ev.error);
+        assert!(ev.out_path.unwrap().ends_with("notes.md"));
+        assert!(r.dir.path().join("notes_media").join("media").join("x.png").is_file());
+        assert_eq!(r.names(), ["notes.docx", "notes.md", "notes_media"]);
+    }
+
+    #[test]
+    fn access_denied_counts_as_transient_only_while_the_folder_is_writable() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(access_denied_is_transient(&d.path().join("out.txt")));
+        assert!(!access_denied_is_transient(&d.path().join("missing").join("out.txt")));
+        assert_eq!(fs::read_dir(d.path()).unwrap().count(), 0, "the probe file is removed");
+    }
+
+    #[test]
+    fn temp_dir_stays_in_history_until_removed() {
+        let r = rig();
+        let src = r.file("a.bin", b"a");
+        let ev = r.run("ok", &[src]);
+        assert!(r.history.lock().unwrap().get(&ev.job_id).unwrap().unwrap().temp_path.is_none());
+        // finish() alone no longer forgets a temp dir: only its removal does.
+        let h = r.history.lock().unwrap();
+        h.set_temp(&ev.job_id, Some(r"C:\x\.recast-left")).unwrap();
+        h.finish(&ev.job_id, &Finish { status: "done", ..Default::default() }, now()).unwrap();
+        assert_eq!(h.get(&ev.job_id).unwrap().unwrap().temp_path.as_deref(), Some(r"C:\x\.recast-left"));
+    }
+
+    #[test]
+    fn a_running_job_holds_its_engine_lease() {
+        use crate::engines::install::{tests::{entry, sevenzip}, LocalFetcher};
+        use crate::engines::manifest::Manifest;
+        use crate::engines::{Engines, ENGINE_BUSY};
+        let d = tempfile::tempdir().unwrap();
+        // An engine archive whose tool.exe is the fake engine.
+        let pkg = d.path().join("pkg").join("tool");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::copy(fake_engine(), pkg.join("tool.exe")).unwrap();
+        let zip = d.path().join("tool-1.0.zip");
+        let st = std::process::Command::new(sevenzip()).args(["a", "-tzip"]).arg(&zip).arg(d.path().join("pkg").join("*")).output().unwrap();
+        assert!(st.status.success());
+        let engines = Arc::new(Engines::new(
+            Manifest { engines: vec![entry(&zip, "1.0")] },
+            d.path().join("engines"),
+            sevenzip(),
+            Box::new(LocalFetcher { source: zip }),
+        ));
+        let catalog = r#"
+[[preset]]
+id = "tool-hang"
+label = "Hang"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "tool"
+bin = "tool"
+out_ext = "txt"
+out_naming = "replace_ext"
+passes = [['hang']]
+"#;
+        let events = Arc::new(Collect::default());
+        let mgr = JobManager::new(
+            Arc::new(Catalog::parse(catalog).unwrap()),
+            engines.clone(),
+            Arc::new(Mutex::new(History::open_in_memory().unwrap())),
+            Arc::new(Settings::default),
+            events.clone(),
+            d.path().join("scratch"),
+        );
+        let src = d.path().join("a.bin");
+        fs::write(&src, b"a").unwrap();
+        let id = mgr.start_jobs("tool-hang", &[src]).unwrap().remove(0);
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !engines.in_use("tool") {
+            assert!(Instant::now() < deadline, "the job never took a lease");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert_eq!(engines.remove("tool").unwrap_err(), ENGINE_BUSY);
+        mgr.cancel(&id);
+        assert_eq!(events.wait_end(&id).status, "cancelled");
+        assert!(!engines.in_use("tool"), "the lease ends with the job");
+        engines.remove("tool").unwrap();
     }
 
     #[test]
