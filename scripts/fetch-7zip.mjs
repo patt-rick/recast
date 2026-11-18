@@ -1,4 +1,4 @@
-// Downloads 7-Zip 23.01 x64 and extracts 7z.exe, 7z.dll and License.txt into src-tauri/bin/.
+// Downloads 7-Zip 26.06 x64 and extracts 7z.exe, 7z.dll and License.txt into src-tauri/bin/.
 // 7zr.exe (the 7z-only standalone) opens the installer, which is a 7z SFX.
 // Recast needs the full 7z.exe + 7z.dll: 7za.exe cannot unpack NSIS installers (Ghostscript).
 // Both downloads are pinned by SHA-256 and checked before anything is executed.
@@ -9,11 +9,11 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSyn
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "2301";
-const RELEASE = "23.01";
+const VERSION = "2606";
+const RELEASE = "26.06";
 const PINNED = {
-  "7zr.exe": "72c98287b2e8f85ea7bb87834b6ce1ce7ce7f41a8c97a81b307d4d4bf900922b",
-  [`7z${VERSION}-x64.exe`]: "26cb6e9f56333682122fafe79dbcdfd51e9f47cc7217dccd29ac6fc33b5598cd",
+  "7zr.exe": "e80db2dad715a6c5adabe292d31ed54e11f4e9b99ca349827b50573b175891bc",
+  [`7z${VERSION}-x64.exe`]: "9b697f65ecc2d9b0152f5ee96d72dde522a7827690349d9307935dacf40f42ec",
 };
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
