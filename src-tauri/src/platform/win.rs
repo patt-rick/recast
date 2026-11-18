@@ -5,7 +5,11 @@ use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::process::Child;
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, STILL_ACTIVE, WAIT_OBJECT_0};
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
+};
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetDiskFreeSpaceExW, GetFileAttributesW,
     INVALID_FILE_ATTRIBUTES, MOVE_FILE_FLAGS, MoveFileExW, SetFileAttributesW,
@@ -18,11 +22,15 @@ use windows::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject,
 };
+use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
     PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
 };
-use windows::core::PCWSTR;
+use windows::Win32::UI::WindowsAndMessaging::{
+    SW_SHOWNOACTIVATE, SetWindowDisplayAffinity, ShowWindow, WDA_EXCLUDEFROMCAPTURE,
+};
+use windows::core::{PCWSTR, w};
 
 /// `CREATE_NO_WINDOW`: engine consoles never flash on screen.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -287,6 +295,110 @@ pub fn open_for_wait(pid: u32) -> Option<ProcessWaiter> {
     .map(ProcessWaiter)
 }
 
+/// A screen rectangle in physical pixels (virtual-screen coordinates).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenRect {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+}
+
+/// Copy what is on screen under `r` as top-down BGRA. Windows marked
+/// `exclude_from_capture` (the pad) are not in the image.
+pub fn capture_region(r: ScreenRect) -> io::Result<Vec<u8>> {
+    if r.w == 0 || r.h == 0 {
+        return Err(io::Error::other("empty capture rect"));
+    }
+    unsafe {
+        let screen = GetDC(None);
+        if screen.is_invalid() {
+            return Err(io::Error::other("GetDC failed"));
+        }
+        let mem = CreateCompatibleDC(Some(screen));
+        let bmp = CreateCompatibleBitmap(screen, r.w as i32, r.h as i32);
+        let old = SelectObject(mem, bmp.into());
+        let copied = BitBlt(
+            mem,
+            0,
+            0,
+            r.w as i32,
+            r.h as i32,
+            Some(screen),
+            r.x,
+            r.y,
+            SRCCOPY,
+        );
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: r.w as i32,
+                biHeight: -(r.h as i32), // negative: top-down rows
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut buf = vec![0u8; r.w as usize * r.h as usize * 4];
+        let lines = if copied.is_ok() {
+            GetDIBits(
+                mem,
+                bmp,
+                0,
+                r.h,
+                Some(buf.as_mut_ptr() as *mut c_void),
+                &mut info,
+                DIB_RGB_COLORS,
+            )
+        } else {
+            0
+        };
+        SelectObject(mem, old);
+        let _ = DeleteObject(bmp.into());
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
+        copied.map_err(to_io)?;
+        if lines != r.h as i32 {
+            return Err(io::Error::other("GetDIBits copied too few lines"));
+        }
+        Ok(buf)
+    }
+}
+
+/// Keep a window out of every screen capture, including Recast's own (spec §6.8).
+/// `hwnd` is the raw handle value (tauri's HWND type comes from another `windows` version).
+pub fn exclude_from_capture(hwnd: isize) -> io::Result<()> {
+    unsafe { SetWindowDisplayAffinity(HWND(hwnd as *mut c_void), WDA_EXCLUDEFROMCAPTURE) }
+        .map_err(to_io)
+}
+
+/// Show a window without taking focus, so an OLE drag in progress keeps going (spec §6.7).
+pub fn show_no_activate(hwnd: isize) {
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut c_void), SW_SHOWNOACTIVATE);
+    }
+}
+
+/// Windows "Transparency effects" (Settings → Personalisation → Colours). Missing value = on.
+pub fn transparency_enabled() -> bool {
+    let mut value = 1u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
+            w!("EnableTransparency"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut value as *mut u32 as *mut c_void),
+            Some(&mut size as *mut u32),
+        )
+    };
+    !r.is_ok() || value != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +548,31 @@ mod tests {
         set_hidden(&deep).unwrap();
         assert!(is_hidden(&deep));
         assert!(free_space(&deep).is_some());
+    }
+
+    #[test]
+    fn captures_a_small_screen_region() {
+        let px = capture_region(ScreenRect {
+            x: 0,
+            y: 0,
+            w: 16,
+            h: 8,
+        })
+        .unwrap();
+        assert_eq!(px.len(), 16 * 8 * 4);
+        assert!(
+            capture_region(ScreenRect {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 8
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn transparency_setting_reads_without_panicking() {
+        let _ = transparency_enabled();
     }
 }

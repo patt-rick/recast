@@ -1,4 +1,5 @@
 pub mod app_state;
+pub mod backdrop;
 pub mod detect;
 pub mod engines;
 pub mod fsutil;
