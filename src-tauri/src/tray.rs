@@ -14,7 +14,9 @@ pub fn show_companion(app: &AppHandle) {
 pub fn build(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Recast", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let convert = MenuItem::with_id(app, "convert", "Convert files…", true, None::<&str>)?;
+    let droppad = MenuItem::with_id(app, "droppad", "Drop pad", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &convert, &droppad, &quit])?;
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().cloned().expect("bundle icon"))
         .tooltip("Recast")
@@ -22,6 +24,9 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, e| match e.id.as_ref() {
             "open" => show_companion(app),
+            "convert" => pick_and_open_pad(app),
+            // Plan 3's triggers replace this: opens the pad mid-drag mode with no files yet.
+            "droppad" => crate::pad::open(app, vec![], crate::pad::PadMode::Drag),
             "quit" => app.exit(0),
             _ => {}
         })
@@ -37,4 +42,28 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
+}
+
+/// Plan 2's way into the pad window: choose files, then the pad opens at the cursor.
+fn pick_and_open_pad(app: &AppHandle) {
+    use tauri_plugin_dialog::DialogExt;
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let Some(files) = app
+            .dialog()
+            .file()
+            .set_title("Choose files to convert")
+            .blocking_pick_files()
+        else {
+            return;
+        };
+        let paths: Vec<String> = files
+            .into_iter()
+            .filter_map(|f| f.into_path().ok())
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        if !paths.is_empty() {
+            crate::pad::open(&app, paths, crate::pad::PadMode::Click);
+        }
+    });
 }

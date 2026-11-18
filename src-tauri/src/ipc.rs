@@ -133,6 +133,58 @@ pub async fn thumbnail(
 }
 
 #[tauri::command]
+pub async fn pad_ready(app: AppHandle) -> Result<(), String> {
+    crate::pad::ready(&app);
+    Ok(())
+}
+
+/// Show and focus the pad for this open (click mode). Ignored if `generation` is stale.
+#[tauri::command]
+pub async fn pad_show(app: AppHandle, generation: u64) -> Result<(), String> {
+    crate::pad::show(&app, generation);
+    Ok(())
+}
+
+/// Hide the pad. Ignored unless `generation` is the current open.
+#[tauri::command]
+pub async fn pad_close(app: AppHandle, generation: u64) -> Result<(), String> {
+    crate::pad::close_if_current(&app, generation);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn pad_track_cursor(app: AppHandle, on: bool) -> Result<(), String> {
+    crate::pad::track_cursor(&app, on);
+    Ok(())
+}
+
+/// The screen under the pad window, in the backdrop wire format (spec §6.8).
+/// Only the pad may ask, and only for its own rectangle.
+#[tauri::command]
+pub async fn capture_backdrop(
+    window: tauri::WebviewWindow,
+) -> Result<tauri::ipc::Response, String> {
+    if window.label() != crate::pad::LABEL {
+        return Err("Only the pad can capture its backdrop.".into());
+    }
+    let pos = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let rect = crate::platform::ScreenRect {
+        x: pos.x,
+        y: pos.y,
+        w: size.width,
+        h: size.height,
+    };
+    let bytes = blocking(move || {
+        let bgra = crate::platform::capture_region(rect).map_err(|e| e.to_string())?;
+        crate::backdrop::encode(rect.w, rect.h, &bgra)
+    })
+    .await
+    .inspect_err(|e| log::warn!("backdrop capture failed: {e}"))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
 pub async fn start_jobs(
     state: State<'_, AppState>,
     preset_id: String,
