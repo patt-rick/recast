@@ -1,6 +1,7 @@
 pub mod detect;
 pub mod engines;
 pub mod fsutil;
+pub mod history;
 pub mod jobs;
 pub mod paths;
 pub mod platform;
