@@ -21,4 +21,25 @@ tauri-build = { version = "2.7.6" }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
-tauri = { version = "2.12.7" }
+tauri = { version = "2.12.7", features = ["tray-icon"] }
+toml = "1.2.1"
+infer = "0.22.0"
+dirs = "7.0.0"
+flexi_logger = "0.31.10"
+sha2 = "0.11.1"
+hex = "0.4.3"
+uuid = { version = "1.29.3", features = ["v4"] }
+rusqlite = { version = "0.43.0", features = ["bundled"] }
+reqwest = { version = "0.13.5", features = ["blocking"] }
+tauri-plugin-notification = "2.8.1"
+tauri-plugin-opener = "2.7.3"
+tauri-plugin-single-instance = "2.5.5"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+insta = "1.49.0"
+tempfile = "3.27.0"
+
+[features]
+# Runs tests/engines_integration.rs against real, downloaded engines.
+engines = []

@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Companion window permissions",
   "windows": ["companion"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "notification:default", "opener:default"]
 }
