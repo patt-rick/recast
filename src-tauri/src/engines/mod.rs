@@ -167,6 +167,8 @@ impl Engines {
         }
         let (dir, _) = install::installed(entry, &self.root).ok_or("ImageMagick vanished after install")?;
         let magick = self.bin(&entry.id, "magick").ok_or("magick.exe missing")?;
+        // The portable build reads policy.xml from its own folder.
+        write_magick_policy(magick.parent().unwrap_or(&dir)).map_err(|e| format!("couldn't write ImageMagick's policy: {e}"))?;
         let out = crate::proc::run_capture(&magick, ["-list", "format"], Duration::from_secs(30))
             .ok_or("`magick -list format` failed")?;
         let caps = caps::parse_magick_formats(&out);
@@ -196,12 +198,33 @@ impl Engines {
     }
 }
 
+/// Restrictive ImageMagick policy: no delegates, no network/script coders, no `@file` paths.
+pub fn write_magick_policy(dir: &Path) -> std::io::Result<()> {
+    const POLICY: &str = r#"<policymap>
+  <policy domain="delegate" rights="none" pattern="*" />
+  <policy domain="coder" rights="none" pattern="{URL,HTTP,HTTPS,FTP,MVG,MSL,SVG,MSVG,TEXT,EPHEMERAL,SHOW,WIN,PLASMA}" />
+  <policy domain="path" rights="none" pattern="@*" />
+</policymap>
+"#;
+    std::fs::write(dir.join("policy.xml"), POLICY)
+}
+
 #[cfg(test)]
 mod tests {
     use super::install::tests::{entry, make_archive, sevenzip};
     use super::install::LocalFetcher;
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn magick_policy_is_written_and_overwrites() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("policy.xml"), "shipped").unwrap();
+        write_magick_policy(d.path()).unwrap();
+        let t = std::fs::read_to_string(d.path().join("policy.xml")).unwrap();
+        assert!(t.contains(r#"pattern="{URL,HTTP,HTTPS,FTP,MVG,MSL,SVG,MSVG,TEXT,EPHEMERAL,SHOW,WIN,PLASMA}""#));
+        assert!(!t.contains("shipped"));
+    }
 
     struct Counting(LocalFetcher, Arc<AtomicUsize>);
     impl Fetcher for Counting {
