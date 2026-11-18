@@ -76,3 +76,13 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: 
 .ring-overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.28); z-index: 10; overflow: hidden; }
 .ring-fit { width: 440px; height: 440px; transform-origin: center; }
 @media (prefers-color-scheme: light) { .ring-overlay .ring { color: #1d1d1f; } .ring-overlay .ring .disc { text-shadow: none; } }
+
+.segmented { display: flex; gap: 4px; margin-bottom: 8px; }
+.tools .dropzone { padding: 16px; }
+.drop-hover.tools .dropzone { border-color: var(--accent); background: rgba(10, 132, 255, 0.08); color: var(--text); }
+.tool-list { margin-top: 12px; }
+.row.sortable { touch-action: none; }
+.row.sortable.dragging { opacity: 0.85; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18); z-index: 1; position: relative; }
+.handle { cursor: grab; letter-spacing: -2px; padding: 4px 6px; }
+.run { margin-top: 14px; background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; padding: 6px 16px; }
+.run:disabled { opacity: 0.45; cursor: default; }
