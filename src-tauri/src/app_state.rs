@@ -29,6 +29,8 @@ pub struct AppState {
     pub sevenzip_licence: PathBuf,
     /// Bundled licence texts (GPL, AGPL, Apache, ImageMagick).
     pub licenses_dir: PathBuf,
+    /// Files a recent `inspect` returned; `thumbnail` reads only these.
+    pub recent: Arc<Mutex<crate::pad_model::RecentPaths>>,
 }
 
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -130,6 +132,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         jobs,
         sevenzip_licence,
         licenses_dir,
+        recent: Arc::new(Mutex::new(Default::default())),
     });
     Ok(())
 }

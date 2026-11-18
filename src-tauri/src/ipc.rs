@@ -98,8 +98,20 @@ async fn blocking<T: Send + 'static>(
 
 #[tauri::command]
 pub async fn inspect(state: State<'_, AppState>, paths: Vec<String>) -> Result<PadModel, String> {
-    let (catalog, engines) = (state.catalog.clone(), state.engines.clone());
-    blocking(move || pad_model::build(&catalog, &engines, &paths)).await
+    let (catalog, engines, recent) = (
+        state.catalog.clone(),
+        state.engines.clone(),
+        state.recent.clone(),
+    );
+    blocking(move || {
+        let model = pad_model::build(&catalog, &engines, &paths)?;
+        let mut r = lock(&recent);
+        for f in &model.files {
+            r.add(f.path.clone());
+        }
+        Ok(model)
+    })
+    .await
 }
 
 #[tauri::command]
