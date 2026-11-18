@@ -39,6 +39,9 @@ In Plan 1, the Activity view shows a plain list of the available presets instead
 14. **ICO pads to square** (resize to 256x256, centred, transparent) instead of stretching; image Shrink discards results that aren't smaller (`discard_if_not_smaller`).
 15. **settings.json read errors** other than "missing" never lead to overwriting the file (the loaded settings are read-only); a corrupt file is kept as `settings.json.bad`.
 16. **MOV re-encodes** to H.264/AAC rather than remuxing, and pandoc may fetch remote images that a document links to (§8 amended).
+17. **ImageMagick hardening is part of the install.** `policy.xml` (now with resource limits: memory 1 GiB, map 2 GiB, disk 4 GiB, width/height 32 KP, area 512 MP) and the capabilities file are written into the staging folder before the atomic rename, via an install post-unpack hook; if either fails nothing is installed, and a missing one later makes the engine Damaged. Every magick run (jobs and the capability probe) sets `MAGICK_CONFIGURE_PATH` to magick.exe's folder (`RunSpec.env`).
+18. **Engine leases instead of an in-use check.** A job takes a shared lease on its engine after `ensure` and holds it until the job ends. Library Download/Update/Repair/Remove need exclusive access and are refused ("A conversion is using this converter…") while any lease is held; a job's `ensure` that must repair a Damaged engine waits for running conversions instead. `JobManager::engine_in_use` is gone.
+19. **Engines start suspended.** Engine and helper processes (jobs, captures, 7-Zip unpacking) are created with `CREATE_SUSPENDED`, put in their Job Object, then resumed, so no grandchild can start outside the kill group. Pipe-reader threads are joined for at most 2 s, then detached. 7-Zip unpacking has a 10-minute cap.
 
 ## File structure
 
