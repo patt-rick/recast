@@ -1,0 +1,15 @@
+---
+source: src/presets/catalog_tests.rs
+expression: argv
+---
+[
+    [
+        "-dNOPAUSE",
+        "-dBATCH",
+        "-dSAFER",
+        "-sDEVICE=png16m",
+        "-r150",
+        "-sOutputFile=out\\page-%03d.png",
+        "in-1.pdf",
+    ],
+]

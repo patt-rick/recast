@@ -1,0 +1,16 @@
+---
+source: src/presets/catalog_tests.rs
+expression: argv
+---
+[
+    [
+        "-dNOPAUSE",
+        "-dBATCH",
+        "-dSAFER",
+        "-sDEVICE=pdfwrite",
+        "-dPDFSETTINGS=/ebook",
+        "-dCompatibilityLevel=1.5",
+        "-sOutputFile=out.pdf",
+        "in-1.pdf",
+    ],
+]

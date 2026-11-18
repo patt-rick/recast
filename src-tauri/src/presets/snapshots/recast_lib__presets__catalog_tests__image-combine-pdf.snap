@@ -1,0 +1,12 @@
+---
+source: src/presets/catalog_tests.rs
+expression: argv
+---
+[
+    [
+        "in-1.png[0]",
+        "in-2.png[0]",
+        "-auto-orient",
+        "out.pdf",
+    ],
+]

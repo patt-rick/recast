@@ -1,0 +1,19 @@
+---
+source: src/presets/catalog_tests.rs
+expression: argv
+---
+[
+    [
+        "-hide_banner",
+        "-nostdin",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-i",
+        "C:\\in\\café 日本 %[1] -x1.flac",
+        "-vn",
+        "-c:a",
+        "alac",
+        "out.m4a",
+    ],
+]

@@ -1,0 +1,20 @@
+---
+source: src/presets/catalog_tests.rs
+expression: argv
+---
+[
+    [
+        "-hide_banner",
+        "-nostdin",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-i",
+        "C:\\in\\café 日本 %[1] -x1.mov",
+        "-vf",
+        "fps=12,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+        "-loop",
+        "0",
+        "out.gif",
+    ],
+]

@@ -1,0 +1,16 @@
+---
+source: src/presets/catalog_tests.rs
+expression: argv
+---
+[
+    [
+        "-f",
+        "markdown",
+        "-t",
+        "epub",
+        "--resource-path=C:\\in",
+        "C:\\in\\café 日本 %[1] -x1.md",
+        "-o",
+        "out.epub",
+    ],
+]

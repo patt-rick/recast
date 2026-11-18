@@ -10,6 +10,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::detect::{canonical, ext_of, Kind};
 
+pub const BUNDLED: &str = include_str!("../../presets/presets.toml");
+
+/// Pandoc reader for an input extension (spec §5.5).
+pub fn pandoc_reader(ext: &str) -> String {
+    match ext {
+        "txt" | "md" | "markdown" => "markdown",
+        "htm" | "html" => "html",
+        other => other,
+    }
+    .to_string()
+}
+
+#[cfg(test)]
+mod catalog_tests;
+
 /// Placeholders the job runner provides; `setting.*` comes from Settings::to_vars.
 pub const BUILTIN_PLACEHOLDERS: &[&str] = &["in", "inputs", "in_dir", "out", "out_dir", "reader", "final_stem", "video_kbps"];
 

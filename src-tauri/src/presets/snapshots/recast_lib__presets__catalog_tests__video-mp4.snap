@@ -1,0 +1,32 @@
+---
+source: src/presets/catalog_tests.rs
+expression: argv
+---
+[
+    [
+        "-hide_banner",
+        "-nostdin",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-i",
+        "C:\\in\\café 日本 %[1] -x1.mov",
+        "-c:v",
+        "libx264",
+        "-crf",
+        "23",
+        "-preset",
+        "medium",
+        "-pix_fmt",
+        "yuv420p",
+        "-vf",
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "160k",
+        "-movflags",
+        "+faststart",
+        "out.mp4",
+    ],
+]

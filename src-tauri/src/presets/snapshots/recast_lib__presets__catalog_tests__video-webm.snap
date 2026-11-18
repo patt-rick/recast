@@ -1,0 +1,28 @@
+---
+source: src/presets/catalog_tests.rs
+expression: argv
+---
+[
+    [
+        "-hide_banner",
+        "-nostdin",
+        "-progress",
+        "pipe:1",
+        "-nostats",
+        "-i",
+        "C:\\in\\café 日本 %[1] -x1.mov",
+        "-c:v",
+        "libvpx-vp9",
+        "-crf",
+        "32",
+        "-b:v",
+        "0",
+        "-row-mt",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "128k",
+        "out.webm",
+    ],
+]
