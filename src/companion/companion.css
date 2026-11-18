@@ -1,0 +1,78 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f2f2f5;
+  --panel: rgba(255, 255, 255, 0.72);
+  --line: rgba(0, 0, 0, 0.08);
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --accent: #0a84ff;
+  --danger: #d70015;
+  font: 13px/1.45 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c20;
+    --panel: rgba(43, 43, 48, 0.78);
+    --line: rgba(255, 255, 255, 0.09);
+    --text: #f5f5f7;
+    --muted: #a1a1a6;
+    --danger: #ff6961;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+[hidden] { display: none !important; }
+button {
+  font: inherit; color: inherit; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+  padding: 4px 10px;
+}
+button:hover { border-color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.ghost { background: transparent; border-color: transparent; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 18px 0 8px; }
+.muted { color: var(--muted); }
+.error { color: var(--danger); }
+
+.shell { display: grid; grid-template-columns: 168px 1fr; height: 100vh; }
+.sidebar { border-right: 1px solid var(--line); padding: 14px 10px; display: flex; flex-direction: column; gap: 4px; }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; margin: 0 6px 14px; }
+.nav { text-align: left; border-color: transparent; background: transparent; }
+.nav.active { background: var(--panel); border-color: var(--line); font-weight: 600; }
+.content { overflow: auto; padding: 18px 22px; }
+
+.dropzone {
+  border: 1.5px dashed var(--line); border-radius: 14px; padding: 26px; text-align: center; color: var(--muted);
+  transition: border-color 0.15s, background 0.15s;
+}
+.drop-hover .dropzone { border-color: var(--accent); background: rgba(10, 132, 255, 0.08); color: var(--text); }
+
+.picker { margin-top: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); padding: 12px; backdrop-filter: blur(20px); }
+.picker header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px; }
+.presets { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.presets button { width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; }
+.presets .label { font-weight: 600; }
+.presets .desc { color: var(--muted); font-size: 12px; }
+.badge { font-size: 11px; color: var(--accent); }
+
+.jobs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.job { display: flex; gap: 12px; justify-content: space-between; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--panel); }
+.job-main { min-width: 0; flex: 1; }
+.job-title strong { overflow-wrap: anywhere; }
+.job-status { color: var(--muted); font-size: 12px; }
+.job.failed .job-status { color: var(--danger); }
+.job-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.details { white-space: pre-wrap; font: 11px/1.4 Consolas, monospace; max-height: 180px; overflow: auto; background: rgba(0, 0, 0, 0.06); padding: 8px; border-radius: 6px; }
+
+.bar { height: 4px; border-radius: 2px; background: var(--line); overflow: hidden; margin-top: 6px; }
+.bar > div { height: 100%; background: var(--accent); transition: width 0.2s; }
+.bar.indeterminate > div { width: 30% !important; animation: slide 1.2s ease-in-out infinite; }
+@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) { .bar.indeterminate > div { animation: none; } }
+
+.rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.row { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--panel); }
+.field { display: grid; grid-template-columns: 200px 1fr; align-items: center; gap: 10px; margin: 6px 0; }
+.field input[type="number"], .field input[type="text"], .field select { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: inherit; max-width: 320px; }
