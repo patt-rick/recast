@@ -91,6 +91,21 @@ impl Inner {
         self.generation += 1;
         self.pending = None;
     }
+
+    /// Should a close go ahead? `None` closes whatever is open; `Some(g)` only open `g`.
+    /// When it should, the open is invalidated here, so check and effect are one step.
+    fn begin_close(&mut self, generation: Option<u64>) -> bool {
+        if generation.is_some_and(|g| !self.is_current(g)) {
+            return false;
+        }
+        self.end();
+        true
+    }
+
+    /// Should `pad_show(generation)` go ahead? Not after a newer open or a close.
+    fn allows_show(&self, generation: u64) -> bool {
+        self.is_current(generation)
+    }
 }
 
 /// Pad window state, managed by Tauri.
@@ -117,28 +132,51 @@ pub fn init(app: &AppHandle) {
     }
 }
 
+/// Run `f` on the main thread, in order with every other pad call. Triggers (Plan 3's
+/// hook threads) and IPC commands call from other threads; window calls and the
+/// generation bookkeeping both want one thread so they cannot interleave.
+fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
+    let handle = app.clone();
+    if let Err(e) = app.run_on_main_thread(move || f(&handle)) {
+        log::warn!("pad: couldn't reach the main thread: {e}");
+    }
+}
+
 /// Position the pad over the cursor and hand it these files. Drag mode shows it at
-/// once (without focus); click mode waits for `pad_show` once the page has drawn.
+/// once (without focus) once the page is ready; click mode waits for `pad_show` once
+/// the page has drawn.
 pub fn open(app: &AppHandle, paths: Vec<String>, mode: PadMode) {
+    on_main(app, move |app| open_now(app, paths, mode));
+}
+
+fn open_now(app: &AppHandle, paths: Vec<String>, mode: PadMode) {
     let Some(w) = app.get_webview_window(LABEL) else {
         log::warn!("pad window missing");
         return;
     };
-    let cursor = app
-        .cursor_position()
-        .unwrap_or(tauri::PhysicalPosition::new(0.0, 0.0));
+    let cursor = match app.cursor_position() {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("pad: cursor position unavailable, using the origin: {e}");
+            PhysicalPosition::new(0.0, 0.0)
+        }
+    };
     let anchor = (cursor.x.round() as i32, cursor.y.round() as i32);
-    if let Ok(Some(m)) = app.monitor_from_point(cursor.x, cursor.y) {
-        let wa = m.work_area();
-        let px = (SIZE * m.scale_factor()).round() as u32;
-        let (x, y) = place(
-            anchor,
-            px,
-            (wa.position.x, wa.position.y, wa.size.width, wa.size.height),
-        );
-        // Position first: the size is then interpreted at the target monitor's DPI.
-        let _ = w.set_position(PhysicalPosition::new(x, y));
-        let _ = w.set_size(tauri::PhysicalSize::new(px, px));
+    match app.monitor_from_point(cursor.x, cursor.y) {
+        Ok(Some(m)) => {
+            let wa = m.work_area();
+            let px = (SIZE * m.scale_factor()).round() as u32;
+            let (x, y) = place(
+                anchor,
+                px,
+                (wa.position.x, wa.position.y, wa.size.width, wa.size.height),
+            );
+            // Position first: the size is then interpreted at the target monitor's DPI.
+            let _ = w.set_position(PhysicalPosition::new(x, y));
+            let _ = w.set_size(tauri::PhysicalSize::new(px, px));
+        }
+        Ok(None) => log::warn!("pad: no monitor at {anchor:?}; leaving the pad where it is"),
+        Err(e) => log::warn!("pad: monitor lookup failed ({e}); leaving the pad where it is"),
     }
     let req = PadOpen {
         paths,
@@ -146,67 +184,107 @@ pub fn open(app: &AppHandle, paths: Vec<String>, mode: PadMode) {
         reduced_transparency: !platform::transparency_enabled(),
         generation: 0,
     };
-    {
-        let st = app.state::<PadState>();
-        let mut inner = lock(&st.inner);
-        if let Some(req) = inner.begin(req) {
-            let _ = app.emit_to(LABEL, "pad://open", &req);
+    // One guard from the generation bump to the show, so a close or newer open can't
+    // slip in between. Emitting and acting under it relies on there being no Rust-side
+    // listeners that take this lock.
+    let st = app.state::<PadState>();
+    let mut inner = lock(&st.inner);
+    if let Some(req) = inner.begin(req) {
+        let _ = app.emit_to(LABEL, "pad://open", &req);
+        if mode == PadMode::Drag {
+            show_drag(app, &w);
         }
     }
-    if mode == PadMode::Drag {
-        match raw_hwnd(&w) {
-            Some(h) => platform::show_no_activate(h),
-            None => {
-                let _ = w.show();
-            }
+    // Page not ready: `ready` delivers the parked open and, in drag mode, shows it.
+}
+
+/// Show without taking focus (an OLE drag is in progress) and start the cursor feed.
+fn show_drag(app: &AppHandle, w: &tauri::WebviewWindow) {
+    match raw_hwnd(w) {
+        Some(h) => platform::show_no_activate(h),
+        None => {
+            let _ = w.show();
         }
-        track_cursor(app, true);
     }
+    track_cursor(app, true);
 }
 
 /// The pad page is listening: deliver an open that arrived earlier.
 pub fn ready(app: &AppHandle) {
-    let st = app.state::<PadState>();
-    let mut inner = lock(&st.inner);
-    inner.ready = true;
-    if let Some(req) = inner.pending.take() {
-        let _ = app.emit_to(LABEL, "pad://open", &req);
-    }
+    on_main(app, |app| {
+        let st = app.state::<PadState>();
+        let mut inner = lock(&st.inner);
+        inner.ready = true;
+        if let Some(req) = inner.pending.take() {
+            let _ = app.emit_to(LABEL, "pad://open", &req);
+            if req.mode == PadMode::Drag
+                && let Some(w) = app.get_webview_window(LABEL)
+            {
+                show_drag(app, &w);
+            }
+        }
+    });
 }
 
-/// Show and focus the pad for a click-mode open. A no-op if a newer open or a close
-/// has happened since.
+/// Show and focus the pad (click mode, or a drag-mode pad after a drop). A no-op if a
+/// newer open or a close has happened since.
 pub fn show(app: &AppHandle, generation: u64) {
-    let st = app.state::<PadState>();
-    if !lock(&st.inner).is_current(generation) {
-        return;
-    }
-    if let Some(w) = app.get_webview_window(LABEL) {
-        let _ = w.show();
-        let _ = w.set_focus();
-    }
+    on_main(app, move |app| {
+        let st = app.state::<PadState>();
+        let inner = lock(&st.inner);
+        if !inner.allows_show(generation) {
+            return;
+        }
+        if let Some(w) = app.get_webview_window(LABEL) {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        drop(inner);
+    });
 }
 
 /// Hide the pad, whatever open it belongs to, and invalidate that open.
 pub fn close(app: &AppHandle) {
-    lock(&app.state::<PadState>().inner).end();
-    track_cursor(app, false);
-    if let Some(w) = app.get_webview_window(LABEL) {
-        let _ = w.hide();
-    }
+    on_main(app, |app| close_now(app, None));
 }
 
 /// Hide the pad only if `generation` is still the current open.
 pub fn close_if_current(app: &AppHandle, generation: u64) {
-    let current = lock(&app.state::<PadState>().inner).is_current(generation);
-    if current {
-        close(app);
+    on_main(app, move |app| close_now(app, Some(generation)));
+}
+
+fn close_now(app: &AppHandle, generation: Option<u64>) {
+    let st = app.state::<PadState>();
+    // Check and act under one guard (see `open_now` on acting while locked).
+    let mut inner = lock(&st.inner);
+    if !inner.begin_close(generation) {
+        return;
     }
+    track_cursor(app, false);
+    if let Some(w) = app.get_webview_window(LABEL) {
+        let _ = w.hide();
+        // A drag-mode pad was shown behind tao's back (`show_no_activate`), so tao still
+        // believes it is hidden and `hide()` above may do nothing. Hide it for real.
+        if let Some(h) = raw_hwnd(&w) {
+            platform::hide_window(h);
+        }
+    }
+}
+
+/// `pad_track_cursor` from the page: ignored unless `generation` is the current open,
+/// so a late "off" from a dismissed pad cannot stop the feed of a newer one.
+pub fn track_cursor_for(app: &AppHandle, on: bool, generation: u64) {
+    let st = app.state::<PadState>();
+    let inner = lock(&st.inner);
+    if inner.is_current(generation) {
+        track_cursor(app, on);
+    }
+    drop(inner);
 }
 
 /// While a drag is involved, emit the cursor relative to the pad (logical px) at 60 Hz:
 /// Tauri sends no positions after a drag leaves the window (spec §4.3).
-pub fn track_cursor(app: &AppHandle, on: bool) {
+fn track_cursor(app: &AppHandle, on: bool) {
     let st = app.state::<PadState>();
     let epoch = st.poll.clone();
     // Any bump retires every running poller; only `on` starts a new one.
@@ -274,6 +352,33 @@ mod tests {
         assert!(s.pending.is_none(), "a ready page gets it at once");
         assert!(!s.is_current(1));
         assert!(s.is_current(2));
+    }
+
+    #[test]
+    fn a_stale_close_leaves_the_newer_session_alone() {
+        let mut s = Inner {
+            ready: true,
+            ..Default::default()
+        };
+        let first = s.begin(req()).unwrap().generation;
+        let second = s.begin(req()).unwrap().generation;
+        assert!(!s.begin_close(Some(first)), "stale close is refused");
+        assert!(s.is_current(second), "and changes nothing");
+        assert!(s.begin_close(Some(second)));
+        assert!(!s.is_current(second));
+    }
+
+    #[test]
+    fn show_after_close_is_a_no_op_and_an_unconditional_close_always_closes() {
+        let mut s = Inner {
+            ready: true,
+            ..Default::default()
+        };
+        let g = s.begin(req()).unwrap().generation;
+        assert!(s.allows_show(g));
+        assert!(s.begin_close(None));
+        assert!(!s.allows_show(g));
+        assert!(s.begin_close(None), "closing an already closed pad is fine");
     }
 
     #[test]

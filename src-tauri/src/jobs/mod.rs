@@ -342,9 +342,18 @@ impl JobManager {
         }
         if preset.per_range() {
             let text = options.ranges.as_deref().unwrap_or("");
-            // The page count makes "past the end" an early, plain error when qpdf is installed.
-            let pages = paths.first().and_then(|p| self.inner.host.pdf_pages(p));
-            crate::presets::ranges::parse(text, pages)?;
+            // The page count makes "past the end" an early, plain error when qpdf is
+            // installed. Every file is checked: the ranges must fit each of them.
+            for p in paths {
+                let pages = self.inner.host.pdf_pages(p);
+                crate::presets::ranges::parse(text, pages).map_err(|e| {
+                    if paths.len() > 1 {
+                        format!("{}: {e}", file_name(p))
+                    } else {
+                        e
+                    }
+                })?;
+            }
         } else if !options.is_empty() {
             return Err("This conversion doesn't take page ranges.".into());
         }
@@ -379,15 +388,20 @@ impl JobManager {
                 .iter()
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect();
+            let options_json = if job.options.is_empty() {
+                None
+            } else {
+                Some(serde_json::to_string(&job.options).map_err(|e| e.to_string())?)
+            };
             lock(&self.inner.history)
-                .insert(&job.id, preset_id, &inputs_str, now())
+                .insert(
+                    &job.id,
+                    preset_id,
+                    &inputs_str,
+                    now(),
+                    options_json.as_deref(),
+                )
                 .map_err(|e| e.to_string())?;
-            if !job.options.is_empty() {
-                let json = serde_json::to_string(&job.options).map_err(|e| e.to_string())?;
-                lock(&self.inner.history)
-                    .set_options(&job.id, Some(&json))
-                    .map_err(|e| e.to_string())?;
-            }
             self.inner.emit(&job, "queued", None, None, None, None);
             ids.push(job.id.clone());
             if skip_same
@@ -897,7 +911,16 @@ impl Inner {
                 job.options.ranges.as_deref().unwrap_or(""),
                 self.host.pdf_pages(first),
             )
-            .map_err(|e| Failure::new(SourceUnreadable, e))?
+            // There is no dedicated code for "these page ranges don't fit this file".
+            // SOURCE_UNREADABLE is the nearest: the problem is how this source and the
+            // request fit together, and it is the one code whose wording points at the
+            // input rather than at the converter or the destination.
+            .map_err(|e| {
+                Failure::new(
+                    SourceUnreadable,
+                    format!("Page ranges don't fit {}: {e}", file_name(first)),
+                )
+            })?
         } else {
             Vec::new()
         };

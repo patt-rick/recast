@@ -4,7 +4,7 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION: i64 = 2;
 const COLS: &str = "seq, id, preset_id, inputs, output, status, error_code, error_detail, stderr_tail, started_at, ended_at, temp_path, options";
 const UNFINISHED: &str = "('queued','waiting_engine','running')";
 
@@ -104,10 +104,22 @@ impl History {
             self.conn
                 .execute("ALTER TABLE jobs ADD COLUMN options TEXT", [])?;
         }
-        self.conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
-            params![SCHEMA_VERSION],
-        )?;
+        // Never downgrade: a database written by a newer Recast keeps its version.
+        let stored: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .and_then(|v| v.parse().ok());
+        if stored.is_none_or(|v| v < SCHEMA_VERSION) {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
+                params![SCHEMA_VERSION.to_string()],
+            )?;
+        }
         Ok(())
     }
 
@@ -117,10 +129,11 @@ impl History {
         preset_id: &str,
         inputs: &[String],
         now: i64,
+        options: Option<&str>,
     ) -> rusqlite::Result<()> {
         self.conn.execute(
-            "INSERT INTO jobs (id, preset_id, inputs, status, started_at) VALUES (?1, ?2, ?3, 'queued', ?4)",
-            params![id, preset_id, serde_json::to_string(inputs).unwrap(), now],
+            "INSERT INTO jobs (id, preset_id, inputs, status, started_at, options) VALUES (?1, ?2, ?3, 'queued', ?4, ?5)",
+            params![id, preset_id, serde_json::to_string(inputs).unwrap(), now, options],
         )?;
         Ok(())
     }
@@ -129,14 +142,6 @@ impl History {
         self.conn.execute(
             "UPDATE jobs SET status = ?2 WHERE id = ?1",
             params![id, status],
-        )?;
-        Ok(())
-    }
-
-    pub fn set_options(&self, id: &str, options: Option<&str>) -> rusqlite::Result<()> {
-        self.conn.execute(
-            "UPDATE jobs SET options = ?2 WHERE id = ?1",
-            params![id, options],
         )?;
         Ok(())
     }
@@ -258,9 +263,14 @@ mod tests {
         }
         let h = History::open(&db).unwrap();
         assert_eq!(h.get("old").unwrap().unwrap().options, None);
-        h.insert("new", "pdf-extract", &["C:\\b.pdf".to_string()], 2)
-            .unwrap();
-        h.set_options("new", Some(r#"{"ranges":"1-3"}"#)).unwrap();
+        h.insert(
+            "new",
+            "pdf-extract",
+            &["C:\\b.pdf".to_string()],
+            2,
+            Some(r#"{"ranges":"1-3"}"#),
+        )
+        .unwrap();
         assert_eq!(
             h.get("new").unwrap().unwrap().options.as_deref(),
             Some(r#"{"ranges":"1-3"}"#)
@@ -272,11 +282,39 @@ mod tests {
     }
 
     #[test]
+    fn schema_version_only_ever_goes_up() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("recast.db");
+        let version = |db: &Path| -> String {
+            rusqlite::Connection::open(db)
+                .unwrap()
+                .query_row(
+                    "SELECT value FROM meta WHERE key = 'schema_version'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        drop(History::open(&db).unwrap());
+        assert_eq!(version(&db), SCHEMA_VERSION.to_string());
+        // A newer Recast wrote this database: opening must not lower the version.
+        rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute(
+                "UPDATE meta SET value = '99' WHERE key = 'schema_version'",
+                [],
+            )
+            .unwrap();
+        drop(History::open(&db).unwrap());
+        assert_eq!(version(&db), "99");
+    }
+
+    #[test]
     fn insert_finish_get_list() {
         let h = h();
-        h.insert("a", "video-mp3", &["C:\\x\\a.mov".into()], 100)
+        h.insert("a", "video-mp3", &["C:\\x\\a.mov".into()], 100, None)
             .unwrap();
-        h.insert("b", "video-mp4", &["C:\\x\\b.mov".into()], 101)
+        h.insert("b", "video-mp4", &["C:\\x\\b.mov".into()], 101, None)
             .unwrap();
         h.finish(
             "a",
@@ -304,10 +342,10 @@ mod tests {
     #[test]
     fn recovery_marks_unfinished_jobs_interrupted_and_returns_temp_dirs() {
         let h = h();
-        h.insert("a", "p", &[], 1).unwrap();
+        h.insert("a", "p", &[], 1, None).unwrap();
         h.set_status("a", "running").unwrap();
         h.set_temp("a", Some("C:\\x\\.recast-a")).unwrap();
-        h.insert("b", "p", &[], 2).unwrap();
+        h.insert("b", "p", &[], 2, None).unwrap();
         h.finish(
             "b",
             &Finish {
@@ -318,7 +356,7 @@ mod tests {
         )
         .unwrap();
         // a finished job whose temp dir couldn't be removed
-        h.insert("c", "p", &[], 4).unwrap();
+        h.insert("c", "p", &[], 4, None).unwrap();
         h.set_temp("c", Some(r"C:\x\.recast-c")).unwrap();
         h.finish(
             "c",
@@ -353,7 +391,7 @@ mod tests {
         let h = h();
         for i in 0..10 {
             let id = format!("j{i}");
-            h.insert(&id, "p", &[], i).unwrap();
+            h.insert(&id, "p", &[], i, None).unwrap();
             if i != 0 {
                 h.finish(
                     &id,
@@ -385,7 +423,7 @@ mod tests {
     fn keyset_paging_survives_removals_between_pages() {
         let h = h();
         for i in 0..6 {
-            h.insert(&format!("j{i}"), "p", &[], i).unwrap();
+            h.insert(&format!("j{i}"), "p", &[], i, None).unwrap();
         }
         let first = h.list(None, 2).unwrap();
         assert_eq!(
@@ -405,7 +443,7 @@ mod tests {
     #[test]
     fn remove_deletes_only_the_row() {
         let h = h();
-        h.insert("a", "p", &[], 1).unwrap();
+        h.insert("a", "p", &[], 1, None).unwrap();
         h.remove("a").unwrap();
         assert!(h.get("a").unwrap().is_none());
     }
@@ -414,7 +452,10 @@ mod tests {
     fn reopening_a_file_keeps_rows() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("recast.db");
-        History::open(&p).unwrap().insert("a", "p", &[], 1).unwrap();
+        History::open(&p)
+            .unwrap()
+            .insert("a", "p", &[], 1, None)
+            .unwrap();
         assert!(History::open(&p).unwrap().get("a").unwrap().is_some());
     }
 }

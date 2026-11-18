@@ -153,8 +153,8 @@ pub async fn pad_close(app: AppHandle, generation: u64) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn pad_track_cursor(app: AppHandle, on: bool) -> Result<(), String> {
-    crate::pad::track_cursor(&app, on);
+pub async fn pad_track_cursor(app: AppHandle, on: bool, generation: u64) -> Result<(), String> {
+    crate::pad::track_cursor_for(&app, on, generation);
     Ok(())
 }
 
@@ -169,6 +169,10 @@ pub async fn capture_backdrop(
     }
     let pos = window.outer_position().map_err(|e| e.to_string())?;
     let size = window.outer_size().map_err(|e| e.to_string())?;
+    let max = crate::backdrop::MAX_SIDE;
+    if size.width == 0 || size.height == 0 || size.width > max || size.height > max {
+        return Err(format!("bad capture size {}x{}", size.width, size.height));
+    }
     let rect = crate::platform::ScreenRect {
         x: pos.x,
         y: pos.y,
@@ -512,7 +516,7 @@ mod tests {
 
     fn history_with(id: &str, status: &str, output: Option<&str>, temp: Option<&str>) -> History {
         let h = History::open_in_memory().unwrap();
-        h.insert(id, "image-png", &["C:\\a.jpg".to_string()], 1)
+        h.insert(id, "image-png", &["C:\\a.jpg".to_string()], 1, None)
             .unwrap();
         h.finish(
             id,

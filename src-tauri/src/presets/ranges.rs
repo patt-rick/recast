@@ -84,14 +84,14 @@ pub fn parse(s: &str, pages: Option<u32>) -> Result<Vec<PageRange>, String> {
             }
         }
         if !out.contains(&r) {
+            if out.len() == MAX_RANGES {
+                return Err(format!("At most {MAX_RANGES} ranges at a time."));
+            }
             out.push(r);
         }
     }
     if out.is_empty() {
         return Err("Enter pages, e.g. 1-3, 5, 8-".into());
-    }
-    if out.len() > MAX_RANGES {
-        return Err(format!("At most {MAX_RANGES} ranges at a time."));
     }
     Ok(out)
 }

@@ -627,6 +627,37 @@ fn pdf_extract_splits_by_page_ranges() {
 }
 
 #[test]
+fn thumbnails_come_back_as_png_from_installed_engines() {
+    let fx = Fixtures::new();
+    let e = engines();
+    // The fixtures have deliberately odd names, which the engines' thumbnailer refuses
+    // (plain_path); thumbnail plain copies.
+    let plain = tempfile::Builder::new()
+        .prefix("recast-thumb-")
+        .tempdir()
+        .unwrap();
+    let png = |src: PathBuf| {
+        let p = plain
+            .path()
+            .join(format!("t{}", src.extension().unwrap().to_str().unwrap()));
+        std::fs::copy(&src, &p).unwrap();
+        let bytes = recast_lib::thumbs::make(&e, &p)
+            .unwrap_or_else(|| panic!("no thumbnail for {}", p.display()));
+        assert!(
+            bytes.starts_with(&[0x89, b'P', b'N', b'G']),
+            "{}",
+            p.display()
+        );
+    };
+    png(fx.p("v.mp4")); // ffmpeg frame
+    png(fx.p("three.pdf")); // ghostscript page 1
+    let heic = fx.p("photo.heic"); // not every ImageMagick build can write HEIC
+    if heic.exists() {
+        png(heic); // magick
+    }
+}
+
+#[test]
 fn text_presets() {
     let fx = Fixtures::new();
     let r = rig(|_| {});

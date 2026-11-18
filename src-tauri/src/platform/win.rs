@@ -28,7 +28,7 @@ use windows::Win32::System::Threading::{
     PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    SW_SHOWNOACTIVATE, SetWindowDisplayAffinity, ShowWindow, WDA_EXCLUDEFROMCAPTURE,
+    SW_HIDE, SW_SHOWNOACTIVATE, SetWindowDisplayAffinity, ShowWindow, WDA_EXCLUDEFROMCAPTURE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -316,7 +316,16 @@ pub fn capture_region(r: ScreenRect) -> io::Result<Vec<u8>> {
             return Err(io::Error::other("GetDC failed"));
         }
         let mem = CreateCompatibleDC(Some(screen));
+        if mem.is_invalid() {
+            ReleaseDC(None, screen);
+            return Err(io::Error::other("CreateCompatibleDC failed"));
+        }
         let bmp = CreateCompatibleBitmap(screen, r.w as i32, r.h as i32);
+        if bmp.is_invalid() {
+            let _ = DeleteDC(mem);
+            ReleaseDC(None, screen);
+            return Err(io::Error::other("CreateCompatibleBitmap failed"));
+        }
         let old = SelectObject(mem, bmp.into());
         let copied = BitBlt(
             mem,
@@ -329,6 +338,8 @@ pub fn capture_region(r: ScreenRect) -> io::Result<Vec<u8>> {
             r.y,
             SRCCOPY,
         );
+        // GetDIBits needs the bitmap deselected from every DC.
+        SelectObject(mem, old);
         let mut info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -344,7 +355,7 @@ pub fn capture_region(r: ScreenRect) -> io::Result<Vec<u8>> {
         let mut buf = vec![0u8; r.w as usize * r.h as usize * 4];
         let lines = if copied.is_ok() {
             GetDIBits(
-                mem,
+                screen,
                 bmp,
                 0,
                 r.h,
@@ -355,7 +366,6 @@ pub fn capture_region(r: ScreenRect) -> io::Result<Vec<u8>> {
         } else {
             0
         };
-        SelectObject(mem, old);
         let _ = DeleteObject(bmp.into());
         let _ = DeleteDC(mem);
         ReleaseDC(None, screen);
@@ -378,6 +388,18 @@ pub fn exclude_from_capture(hwnd: isize) -> io::Result<()> {
 pub fn show_no_activate(hwnd: isize) {
     unsafe {
         let _ = ShowWindow(HWND(hwnd as *mut c_void), SW_SHOWNOACTIVATE);
+    }
+}
+
+/// Hide a window that `show_no_activate` showed.
+///
+/// `show_no_activate` bypasses tao, so tao's cached VISIBLE flag stays false: a later
+/// `WebviewWindow::hide()` sees "already hidden" and does nothing, and `set_focus` is
+/// skipped too. Hiding through the OS directly keeps the real state correct; the
+/// tao flag is resynced by the next tauri `show()`.
+pub fn hide_window(hwnd: isize) {
+    unsafe {
+        let _ = ShowWindow(HWND(hwnd as *mut c_void), SW_HIDE);
     }
 }
 

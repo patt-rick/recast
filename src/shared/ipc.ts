@@ -16,7 +16,8 @@ export const ipc = {
   padReady: () => invoke<void>("pad_ready"),
   padShow: (generation: number) => invoke<void>("pad_show", { generation }),
   padClose: (generation: number) => invoke<void>("pad_close", { generation }),
-  padTrackCursor: (on: boolean) => invoke<void>("pad_track_cursor", { on }),
+  padTrackCursor: (on: boolean, generation: number) =>
+    invoke<void>("pad_track_cursor", { on, generation }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   retryJob: (id: string, fallback = false) => invoke<string[]>("retry_job", { id, fallback }),
   /** Newest first; `beforeSeq` = the smallest `seq` already loaded (omit for the first page). */

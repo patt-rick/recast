@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pad",
+  "description": "Pad window permissions: events, window focus and drag-drop listeners only",
+  "windows": ["pad"],
+  "permissions": ["core:default"]
+}

@@ -95,8 +95,17 @@ pub fn make(engines: &Engines, path: &Path) -> Option<Vec<u8>> {
     let meta = std::fs::metadata(path).ok()?;
     let head = detect::read_head(path).ok()?;
     let (kind, format) = detect::classify(path, &head);
-    let installed = |id: &str| engines.is_ready(id);
-    match plan(kind, &format, meta.len(), path, &installed) {
+    // Never wait on an install or removal for a thumbnail.
+    let installed = |id: &str| engines.is_ready(id) && engines.lease_available(id);
+    let plan = plan(kind, &format, meta.len(), path, &installed);
+    // Hold the engine while it runs so it can't be removed or replaced underneath us.
+    let _lease = match plan {
+        Plan::Ffmpeg => Some(engines.acquire("ffmpeg")),
+        Plan::Magick => Some(engines.acquire("imagemagick")),
+        Plan::Ghostscript => Some(engines.acquire("ghostscript")),
+        Plan::Passthrough | Plan::Glyph => None,
+    };
+    match plan {
         Plan::Passthrough => std::fs::read(path).ok(),
         Plan::Ffmpeg => {
             let ffmpeg = engines.bin("ffmpeg", "ffmpeg")?;
@@ -130,6 +139,8 @@ pub fn make(engines: &Engines, path: &Path) -> Option<Vec<u8>> {
                 "-dTextAlphaBits=4",
                 "-dGraphicsAlphaBits=4",
                 "-sOutputFile=-",
+                // Keep Ghostscript's own messages out of the PNG on stdout.
+                "-sstdout=%stderr",
             ]
             .iter()
             .map(OsString::from)
