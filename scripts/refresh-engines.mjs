@@ -74,7 +74,7 @@ for (const e of ENGINES) {
   rmSync(x, { recursive: true, force: true });
   execFileSync(sevenZip, ["x", "-y", `-o${x}`, file], { stdio: "ignore" });
   for (const exe of Object.values(e.bins)) if (!find(x, exe)) throw new Error(`${e.id}: ${exe} not found after extraction`);
-  pinned.push({ ...e, version: rel.tag_name.replace(/^v/, ""), url: asset.browser_download_url,
+  pinned.push({ ...e, version: rel.tag_name.replace(/^v/, "").replace(/^gs(\d+)(\d\d)(\d)$/, "$1.$2.$3"), url: asset.browser_download_url,
     sha256: await sha256(file), size: statSync(file).size,
     archive: e.archive ?? (asset.name.endsWith(".7z") ? "7z" : "zip") });
 }

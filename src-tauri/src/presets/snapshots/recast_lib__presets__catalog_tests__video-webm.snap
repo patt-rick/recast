@@ -19,6 +19,8 @@ expression: argv
         "0",
         "-row-mt",
         "1",
+        "-af",
+        "aformat=channel_layouts=7.1|5.1|stereo",
         "-c:a",
         "libopus",
         "-b:a",

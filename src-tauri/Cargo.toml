@@ -2,8 +2,8 @@
 name = "recast"
 version = "0.1.0"
 description = "Recast file converter"
-authors = ["you"]
-license = ""
+authors = ["Patrick Ackom"]
+license = "MIT"
 repository = ""
 edition = "2024"
 rust-version = "1.90"

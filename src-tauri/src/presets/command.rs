@@ -54,7 +54,7 @@ pub fn build_command(preset: &Preset, b: &BuildInput) -> Result<Vec<Vec<OsString
     let mut passes = Vec::new();
     for template in &preset.passes {
         let mut argv: Vec<OsString> = Vec::new();
-        if preset.engine == "ffmpeg" {
+        if preset.bin == "ffmpeg" {
             argv.extend(FFMPEG_PREFIX.iter().map(OsString::from));
         }
         for arg in template {

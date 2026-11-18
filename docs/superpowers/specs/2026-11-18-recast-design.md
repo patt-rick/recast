@@ -176,7 +176,7 @@ The ring order is the order in the table, and anything past five spills into Mor
 | WebM | ffmpeg | `-c:v libvpx-vp9 -crf 32 -b:v 0 -c:a libopus -b:a 128k` |
 | Shrink | ffmpeg | two-pass x264 to **{target_mb}** MB (default 25), with `-pix_fmt yuv420p` and even dimensions as for MP4. Video kbps = (target_bits × 0.97) / duration − audio 128k; the 3% covers container overhead so the output lands ≤ target. Pass 1: `-pass 1 -passlogfile {tmp}\pass -an -f null NUL`; pass 2: `-pass 2 -passlogfile {tmp}\pass`. The pass logs (`.log`, `.mbtree`) live in the job's temp dir (§6.4), so concurrent jobs never collide, and are deleted with it. **Skipped with a message** if the source is already ≤ target. **Fails up front with a reason** if the result would be < 150 kbps. Output `name (compressed).mp4` |
 | M4A | ffmpeg | `-vn -c:a aac -b:a {aac_kbps}k` (default 192). Hidden when ffprobe finds no audio stream |
-| More → MKV, MOV, Opus, WAV | ffmpeg | remux where the codecs allow (`-c copy`), otherwise re-encode |
+| More → MKV, MOV, Opus, WAV | ffmpeg | MKV remuxes (`-c copy`); MOV re-encodes to H.264/AAC |
 
 ### 5.2 Audio (`mp3 m4a aac wav flac ogg opus wma aiff aif alac`)
 MP3, M4A, Opus (`libopus 128k`), FLAC, WAV (`pcm_s16le`) · More → ALAC (`.m4a`, `-c:a alac`), AIFF, OGG Vorbis. Audio has no Shrink preset; same-format hiding (§5) removes the preset matching the input.
@@ -378,7 +378,7 @@ Logs go to `%LOCALAPPDATA%\Recast\logs\recast.log` (rotating, 5 × 1 MB). Logs a
 ---
 
 ## 8. Security and privacy
-- **No network** except engine downloads from the pinned HTTPS URLs in the bundled manifest. No telemetry and no update pings in v1.
+- **No network** except engine downloads from the pinned HTTPS URLs in the bundled manifest. No telemetry and no update pings in v1. Pandoc may fetch remote images that a converted document itself links to.
 - Engines are run by absolute path from Recast's own folder, with argv arrays. **There is never a shell**, so filenames can't inject commands.
 - Downloaded binaries run only after SHA-256 verification.
 - The backdrop snapshot stays in memory and is discarded when the pad closes.

@@ -12,6 +12,8 @@ expression: argv
         "-i",
         "C:\\in\\café 日本 %[1] -x1.flac",
         "-vn",
+        "-af",
+        "aformat=channel_layouts=7.1|5.1|stereo",
         "-c:a",
         "libopus",
         "-b:a",

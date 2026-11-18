@@ -42,6 +42,7 @@ pub fn dir_size(root: &Path) -> u64 {
 
 /// fs::rename, retried with backoff (100 ms, doubling) while antivirus or sync
 /// clients hold a transient lock, up to `budget` in total.
+/// Replaces nothing only by accident of usage: fs::rename overwrites files, so never use this for job outputs (use platform::move_no_replace).
 pub fn rename_with_retry(from: &Path, to: &Path, budget: std::time::Duration) -> io::Result<()> {
     let budget = budget.as_millis() as u64;
     let mut wait = 100u64;

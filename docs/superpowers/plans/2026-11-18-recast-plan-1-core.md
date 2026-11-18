@@ -35,6 +35,10 @@ In Plan 1, the Activity view shows a plain list of the available presets instead
 10. **Engine waits are cancellable; the install isn't.** Cancelling a job that is waiting for an engine download ends the job at once; the download continues for later jobs. HTTP reads time out after 60 s idle.
 11. **Single instance arrives early.** `tauri-plugin-single-instance` is registered in Plan 1 (it only focuses the window), because a second copy's crash recovery would delete the first copy's live temp dirs. Plan 3 adds argv forwarding.
 12. **Batch progress** ("n/total files", §6.4) is shown per job in Activity for now; the pad's batch ring arrives in Plan 2.
+13. **Preset field `skip_formats`** (canonical input formats a preset is hidden for): Shrink is hidden for GIF and ICO.
+14. **ICO pads to square** (resize to 256x256, centred, transparent) instead of stretching; image Shrink discards results that aren't smaller (`discard_if_not_smaller`).
+15. **settings.json read errors** other than "missing" never lead to overwriting the file (the loaded settings are read-only); a corrupt file is kept as `settings.json.bad`.
+16. **MOV re-encodes** to H.264/AAC rather than remuxing, and pandoc may fetch remote images that a document links to (§8 amended).
 
 ## File structure
 

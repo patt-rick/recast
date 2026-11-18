@@ -110,6 +110,9 @@ pub struct Preset {
     pub progress: ProgressKind,
     #[serde(default)]
     pub requires: Vec<String>,
+    /// Canonical input formats this preset is hidden for (e.g. Shrink for animated GIF).
+    #[serde(default)]
+    pub skip_formats: Vec<String>,
     /// Shrink/Compress: shown even when the output format equals the input's.
     #[serde(default)]
     pub keep_same_format: bool,
@@ -196,6 +199,11 @@ impl Catalog {
                 None => errs.push(format!("{id}: unknown engine '{}'", p.engine)),
                 Some(bins) if !bins.contains(&p.bin) => errs.push(format!("{id}: engine '{}' has no bin '{}'", p.engine, p.bin)),
                 _ => {}
+            }
+            for r in &p.requires {
+                if r != "audio_stream" {
+                    errs.push(format!("{id}: unknown requirement '{r}'"));
+                }
             }
             if p.kinds.is_empty() {
                 errs.push(format!("{id}: kinds is empty"));
@@ -320,6 +328,14 @@ passes = [['--empty', '--pages', '{inputs}', '--', '{out}']]
         let bad = MINI.replace("min_files = 2\n", "");
         let errs = Catalog::parse(&bad).unwrap().validate(&engines(), &keys()).unwrap_err();
         assert!(errs.join("\n").contains("{inputs} needs min_files >= 2"));
+    }
+
+    #[test]
+    fn unknown_requirement_is_rejected() {
+        let bad = MINI.replace("audio_stream", "video_stream");
+        let errs = Catalog::parse(&bad).unwrap().validate(&engines(), &keys()).unwrap_err();
+        assert!(errs.join("
+").contains("unknown requirement 'video_stream'"), "{errs:?}");
     }
 
     #[test]

@@ -115,6 +115,8 @@ pub struct Loaded {
     pub settings: Settings,
     pub raw: Value,
     pub warnings: Vec<String>,
+    /// settings.json existed but couldn't be read: never overwrite it.
+    pub read_only: bool,
 }
 
 pub fn var_keys() -> BTreeSet<String> {
@@ -122,16 +124,33 @@ pub fn var_keys() -> BTreeSet<String> {
 }
 
 pub fn load(path: &Path) -> Loaded {
-    match std::fs::read_to_string(path) {
-        Err(_) => from_value(Value::Object(Map::new())),
-        Ok(text) => match serde_json::from_str::<Value>(&text) {
-            Ok(v) => from_value(v),
-            Err(e) => {
-                let mut l = from_value(Value::Object(Map::new()));
-                l.warnings.push(format!("settings.json is not valid JSON ({e}); using defaults"));
-                l
+    let defaults = || from_value(Value::Object(Map::new()));
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return defaults(),
+        Err(e) => {
+            let mut l = defaults();
+            l.warnings.push(format!("settings.json couldn't be read ({e}); using defaults and leaving the file alone"));
+            l.read_only = true;
+            return l;
+        }
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+    match serde_json::from_str::<Value>(text) {
+        Ok(v) => from_value(v),
+        Err(e) => {
+            let mut l = defaults();
+            let bad = path.with_extension("json.bad");
+            match std::fs::rename(path, &bad) {
+                Ok(()) => l.warnings.push(format!("settings.json is not valid JSON ({e}); using defaults, original kept as settings.json.bad")),
+                Err(re) => {
+                    l.warnings.push(format!("settings.json is not valid JSON ({e}) and couldn't be set aside ({re}); using defaults"));
+                    l.read_only = true;
+                }
             }
-        },
+            l
+        }
     }
 }
 
@@ -143,16 +162,21 @@ pub fn from_value(raw: Value) -> Loaded {
     // v1 has no migrations; later versions transform `raw` here before overlaying.
     settings.version = CURRENT_VERSION;
     settings.sanitize(&mut warnings);
-    Loaded { settings, raw, warnings }
+    Loaded { settings, raw, warnings, read_only: false }
 }
 
 pub fn apply_patch(current: &Loaded, patch: Value) -> Loaded {
     let mut raw = current.raw.clone();
     deep_merge(&mut raw, &patch);
-    from_value(raw)
+    let mut l = from_value(raw);
+    l.read_only = current.read_only;
+    l
 }
 
 pub fn save(path: &Path, l: &Loaded) -> std::io::Result<()> {
+    if l.read_only {
+        return Err(std::io::Error::other("settings.json couldn't be read at startup; not overwriting it"));
+    }
     let mut out = l.raw.clone();
     deep_merge(&mut out, &serde_json::to_value(&l.settings).expect("settings serialize"));
     if let Some(dir) = path.parent() {
@@ -288,6 +312,40 @@ mod tests {
         let l = load(&path);
         assert_eq!(l.settings, Settings::default());
         assert_eq!(l.warnings.len(), 1);
+    }
+
+    #[test]
+    fn corrupt_file_is_preserved_as_bad() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{not json").unwrap();
+        let l = load(&path);
+        assert!(!l.read_only);
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_to_string(dir.path().join("settings.json.bad")).unwrap(), "{not json");
+        save(&path, &l).unwrap();
+    }
+
+    #[test]
+    fn bom_file_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "\u{feff}{\"quality\":{\"mp3_kbps\":256}}").unwrap();
+        let l = load(&path);
+        assert_eq!(l.settings.quality.mp3_kbps, 256);
+        assert!(l.warnings.is_empty(), "{:?}", l.warnings);
+    }
+
+    #[test]
+    fn unreadable_file_is_read_only_and_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::create_dir(&path).unwrap(); // reading a directory fails with a non-NotFound error
+        let l = load(&path);
+        assert!(l.read_only);
+        assert_eq!(l.warnings.len(), 1);
+        assert!(save(&path, &l).is_err());
+        assert!(apply_patch(&l, json!({})).read_only);
     }
 
     #[test]

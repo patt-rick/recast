@@ -47,6 +47,9 @@ fn applies(p: &Preset, files: &[FileFacts], caps: &Caps) -> bool {
     if !p.keep_same_format && !p.is_multi() && files.iter().all(|f| p.out_format_for(&f.format) == f.format) {
         return false;
     }
+    if files.iter().any(|f| p.skip_formats.contains(&f.format)) {
+        return false;
+    }
     if p.requires.iter().any(|r| r == "audio_stream") && files.iter().any(|f| f.has_audio == Some(false)) {
         return false;
     }
@@ -109,6 +112,17 @@ mod tests {
         for gone in ["video-mp3", "video-m4a", "video-opus", "video-wav"] {
             assert!(!a.contains(&gone.to_string()), "{gone}");
         }
+    }
+
+    #[test]
+    fn shrink_is_hidden_for_gif_and_ico() {
+        let c = Catalog::parse(BUNDLED).unwrap();
+        for fmt in ["gif", "ico"] {
+            let a = ids(&available(&c, &[f(Kind::Image, fmt, None)], &NO_CAPS));
+            assert!(!a.contains(&"image-shrink".to_string()), "{fmt}");
+        }
+        let a = ids(&available(&c, &[f(Kind::Image, "png", None)], &NO_CAPS));
+        assert!(a.contains(&"image-shrink".to_string()));
     }
 
     #[test]

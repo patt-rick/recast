@@ -54,7 +54,7 @@ bin = "ffmpeg"
 progress = "ffmpeg"
 out_ext = "webm"
 out_naming = "replace_ext"
-passes = [['-i', '{in}', '-c:v', 'libvpx-vp9', '-crf', '32', '-b:v', '0', '-row-mt', '1', '-c:a', 'libopus', '-b:a', '128k', '{out}']]
+passes = [['-i', '{in}', '-c:v', 'libvpx-vp9', '-crf', '32', '-b:v', '0', '-row-mt', '1', '-af', 'aformat=channel_layouts=7.1|5.1|stereo', '-c:a', 'libopus', '-b:a', '128k', '{out}']]
 
 [[preset]]
 id = "video-shrink"
@@ -125,7 +125,7 @@ progress = "ffmpeg"
 requires = ["audio_stream"]
 out_ext = "opus"
 out_naming = "replace_ext"
-passes = [['-i', '{in}', '-vn', '-c:a', 'libopus', '-b:a', '128k', '{out}']]
+passes = [['-i', '{in}', '-vn', '-af', 'aformat=channel_layouts=7.1|5.1|stereo', '-c:a', 'libopus', '-b:a', '128k', '{out}']]
 
 [[preset]]
 id = "video-wav"
@@ -179,7 +179,7 @@ bin = "ffmpeg"
 progress = "ffmpeg"
 out_ext = "opus"
 out_naming = "replace_ext"
-passes = [['-i', '{in}', '-vn', '-c:a', 'libopus', '-b:a', '128k', '{out}']]
+passes = [['-i', '{in}', '-vn', '-af', 'aformat=channel_layouts=7.1|5.1|stereo', '-c:a', 'libopus', '-b:a', '128k', '{out}']]
 
 [[preset]]
 id = "audio-flac"
@@ -311,9 +311,11 @@ engine = "imagemagick"
 bin = "magick"
 stage_inputs = true
 keep_same_format = true
+discard_if_not_smaller = true
+skip_formats = ["gif", "ico"]
 out_ext = "same"
 out_naming = "suffix:compressed"
-passes = [['{in}[0]', '-auto-orient', '-resize', '{setting.shrink.image_px}x{setting.shrink.image_px}>', '-quality', '80', '{out}']]
+passes = [['{in}[0]', '-auto-orient', '-resize', '{setting.shrink.image_px}x{setting.shrink.image_px}>', '-define', 'png:compression-filter=5', '-define', 'png:compression-level=9', '-quality', '80', '{out}']]
 
 [[preset]]
 id = "image-jxl"
@@ -339,7 +341,7 @@ bin = "magick"
 stage_inputs = true
 out_ext = "ico"
 out_naming = "replace_ext"
-passes = [['{in}[0]', '-auto-orient', '-background', 'none', '-define', 'icon:auto-resize=256,48,32,16', '{out}']]
+passes = [['{in}[0]', '-auto-orient', '-background', 'none', '-resize', '256x256', '-gravity', 'center', '-extent', '256x256', '-define', 'icon:auto-resize=256,48,32,16', '{out}']]
 
 [[preset]]
 id = "image-tiff"
