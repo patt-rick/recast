@@ -102,7 +102,7 @@ running ──new trigger──► the running job continues in Activity; the pa
 - **One pad at a time:** a trigger while the pad is open reuses it (see the last transition above).
 
 - **Running:** the segments retract into the disc and the disc's rim becomes a progress ring. It's indeterminate when the engine reports no progress (§6.4). The pad can be dismissed with Esc or by clicking outside it. The job keeps running and appears in Activity.
-- **Notifications** are not shown while the Recast window is visible and focused: the Activity row already says it. Engine-install failures still notify.
+- **Notifications** for jobs are suppressed whenever the companion window is visible and focused, whichever section (Activity, Library, Settings) is showing: the Activity row already says it. Engine-install failures still notify.
 - **Done:** Windows notification, "holiday.mp3 ready", with a **Show in folder** action. A batch of **3 or more** files sends **one** combined notification when the batch ends ("8 files converted · 1 failed").
 - **Failed:** notification, "Couldn't convert holiday.mov", with a **Details** action that opens Activity at that job.
 - **Keyboard:** when the pad is open, ←/→ (or Tab) move around the ring, Enter runs the focused segment, and Esc closes.
@@ -344,12 +344,12 @@ Nothing outside `platform` may call OS APIs directly.
 ### 6.11 IPC (typed, in `src/shared/ipc.ts` mirrored in Rust)
 - **Commands:**
   - `inspect(paths)`
-  - `start_jobs(preset_id, paths)`, `cancel_job(id)`, `retry_job(id, fallback)`, `list_jobs(page)`, `remove_job(id)`. `retry_job` with `fallback = true` re-runs into the fallback folder (§5.7)
+  - `start_jobs(preset_id, paths)`, `cancel_job(id)`, `retry_job(id, fallback)`, `list_jobs(before_seq)` (keyset paging, 50 rows, newest first; each record carries its `seq`), `remove_job(id)`. `retry_job` with `fallback = true` re-runs into the fallback folder (§5.7)
   - `engines_list()`, `engine_install(id)`, `engine_remove(id)`, `engine_verify(id)`
   - `get_settings()`, `set_settings(patch)`
   - `reveal_job(id)`, `open_job(id)`, `notices()`, `notice_text(index)`
   - Planned for Plan 2: `capture_backdrop()`
-  - There are deliberately no generic `reveal(path)` or `open(path)` commands, because the webview could pass them any path. `reveal_job` and `open_job` look up the history row and require status `done` and an existing output. `notice_text(index)` returns the licence text of a notice (by its index in `notices()`): the installed engine's own licence file (plain text, capped at 512 KB) when present, otherwise the text bundled in `resources/licenses/`.
+  - There are deliberately no generic `reveal(path)` or `open(path)` commands, because the webview could pass them any path. `reveal_job` and `open_job` look up the history row and require status `done` and an existing output. `notice_text(index, name)` returns the licence text of a notice (by its index in `notices()`, and fails with "The list changed; reopen Library." if the notice at that index no longer has that name): the installed engine's own licence file (plain text, capped at 512 KB) when present, otherwise the text bundled at `<resource dir>/licenses/` (source: `src-tauri/licenses/`).
   - Commands are `async` and run their blocking work off the main thread. Rust and TS mirror each other (`src/shared/ipc.ts`: `ipc.revealJob`, `ipc.openJob`, `ipc.noticeText`).
 - **Events:** `job://*`, `engine://progress|done|failed`, `pad://open{paths, anchor}`.
 

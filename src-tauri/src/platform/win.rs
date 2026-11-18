@@ -5,7 +5,7 @@ use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::process::Child;
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE, WAIT_OBJECT_0};
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetDiskFreeSpaceExW, GetFileAttributesW,
     INVALID_FILE_ATTRIBUTES, MOVE_FILE_FLAGS, MoveFileExW, SetFileAttributesW,
@@ -19,8 +19,8 @@ use windows::Win32::System::JobObjects::{
     SetInformationJobObject, TerminateJobObject,
 };
 use windows::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, ResumeThread,
-    THREAD_SUSPEND_RESUME,
+    GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
 };
 use windows::core::PCWSTR;
 
@@ -250,6 +250,41 @@ pub fn is_process_alive(pid: u32) -> bool {
             Err(_) => false,
         }
     }
+}
+
+/// A handle that becomes signalled when the process it was opened for exits.
+pub struct ProcessWaiter(HANDLE);
+
+// A process handle may be used from any thread.
+unsafe impl Send for ProcessWaiter {}
+
+impl ProcessWaiter {
+    /// True if the process has exited (or already had) within `timeout`.
+    pub fn wait(&self, timeout: std::time::Duration) -> bool {
+        let ms = timeout.as_millis().min(u32::MAX as u128 - 1) as u32;
+        unsafe { WaitForSingleObject(self.0, ms) == WAIT_OBJECT_0 }
+    }
+}
+
+impl Drop for ProcessWaiter {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CloseHandle(self.0);
+        }
+    }
+}
+
+/// Open `pid` so its exit can be waited on; None if it can't be opened (e.g. already gone).
+pub fn open_for_wait(pid: u32) -> Option<ProcessWaiter> {
+    unsafe {
+        OpenProcess(
+            PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        )
+    }
+    .ok()
+    .map(ProcessWaiter)
 }
 
 #[cfg(test)]

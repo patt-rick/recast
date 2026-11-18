@@ -5,11 +5,13 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 const SCHEMA_VERSION: &str = "1";
-const COLS: &str = "id, preset_id, inputs, output, status, error_code, error_detail, stderr_tail, started_at, ended_at, temp_path";
+const COLS: &str = "seq, id,preset_id, inputs, output, status, error_code, error_detail, stderr_tail, started_at, ended_at, temp_path";
 const UNFINISHED: &str = "('queued','waiting_engine','running')";
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct JobRecord {
+    /// Insertion order; the paging cursor for `list`.
+    pub seq: i64,
     pub id: String,
     pub preset_id: String,
     pub inputs: Vec<String>,
@@ -39,6 +41,7 @@ pub struct History {
 fn row(r: &rusqlite::Row) -> rusqlite::Result<JobRecord> {
     let inputs: String = r.get("inputs")?;
     Ok(JobRecord {
+        seq: r.get("seq")?,
         id: r.get("id")?,
         preset_id: r.get("preset_id")?,
         inputs: serde_json::from_str(&inputs).unwrap_or_default(),
@@ -146,11 +149,14 @@ impl History {
             .optional()
     }
 
-    pub fn list(&self, page: u32, per_page: u32) -> rusqlite::Result<Vec<JobRecord>> {
+    /// Newest first. `before_seq`: only rows older than this (keyset paging, so removing
+    /// a row never makes the next page skip one).
+    pub fn list(&self, before_seq: Option<i64>, limit: u32) -> rusqlite::Result<Vec<JobRecord>> {
         let mut st = self.conn.prepare(&format!(
-            "SELECT {COLS} FROM jobs ORDER BY seq DESC LIMIT ?1 OFFSET ?2"
+            "SELECT {COLS} FROM jobs WHERE seq < COALESCE(?1, 9223372036854775807)
+             ORDER BY seq DESC LIMIT ?2"
         ))?;
-        let rows = st.query_map(params![per_page, page * per_page], row)?;
+        let rows = st.query_map(params![before_seq, limit], row)?;
         rows.collect()
     }
 
@@ -234,7 +240,7 @@ mod tests {
         assert_eq!(a.output.as_deref(), Some("C:\\x\\a.mp3"));
         assert_eq!(a.inputs, vec!["C:\\x\\a.mov".to_string()]);
         assert_eq!(a.ended_at, Some(110));
-        let list = h.list(0, 50).unwrap();
+        let list = h.list(None, 50).unwrap();
         assert_eq!(
             list.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
             ["b", "a"],
@@ -309,11 +315,37 @@ mod tests {
         }
         h.set_temp("j1", Some(r"C:\x\.recast-j1")).unwrap();
         h.prune(3).unwrap();
-        let ids: Vec<String> = h.list(0, 50).unwrap().into_iter().map(|r| r.id).collect();
+        let ids: Vec<String> = h
+            .list(None, 50)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
         assert_eq!(
             ids,
             ["j9", "j8", "j7", "j1", "j0"],
             "a row whose temp dir is still on disk is kept"
+        );
+    }
+
+    #[test]
+    fn keyset_paging_survives_removals_between_pages() {
+        let h = h();
+        for i in 0..6 {
+            h.insert(&format!("j{i}"), "p", &[], i).unwrap();
+        }
+        let first = h.list(None, 2).unwrap();
+        assert_eq!(
+            first.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["j5", "j4"]
+        );
+        h.remove("j5").unwrap();
+        h.remove("j4").unwrap();
+        let cursor = first.iter().map(|r| r.seq).min();
+        let next = h.list(cursor, 2).unwrap();
+        assert_eq!(
+            next.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            ["j3", "j2"]
         );
     }
 

@@ -282,29 +282,42 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let cancel = CancelToken::default();
         let c2 = cancel.clone();
+        let pid_file = d.path().join("grandchild.pid");
+        let pf = pid_file.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Cancel only once the grandchild exists and we hold a handle to wait on it.
         std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(700));
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while Instant::now() < deadline {
+                if let Some(pid) = std::fs::read_to_string(&pf)
+                    .ok()
+                    .and_then(|s| s.trim().parse::<u32>().ok())
+                {
+                    if let Some(w) = crate::platform::open_for_wait(pid) {
+                        let _ = tx.send(w);
+                    }
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
             c2.cancel();
         });
         let r = run(
-            &spec(d.path(), &["spawn_child"], ProgressKind::None, 60_000),
+            &spec(
+                d.path(),
+                &["spawn_child", pid_file.to_str().unwrap()],
+                ProgressKind::None,
+                60_000,
+            ),
             &cancel,
             &mut |_| {},
         )
         .unwrap();
         assert_eq!(r.outcome, RunOutcome::Cancelled);
-        let pid: u32 = r
-            .tail
-            .iter()
-            .find_map(|l| l.strip_prefix("child="))
-            .expect("child pid in tail")
-            .parse()
-            .unwrap();
-        std::thread::sleep(Duration::from_millis(200));
-        assert!(
-            !crate::platform::is_process_alive(pid),
-            "grandchild survived"
-        );
+        let waiter = rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the grandchild was never opened");
+        assert!(waiter.wait(Duration::from_secs(5)), "grandchild survived");
     }
 
     #[test]

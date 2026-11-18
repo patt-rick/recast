@@ -10,7 +10,8 @@ export const ipc = {
   startJobs: (presetId: string, paths: string[]) => invoke<string[]>("start_jobs", { presetId, paths }),
   cancelJob: (id: string) => invoke<void>("cancel_job", { id }),
   retryJob: (id: string, fallback = false) => invoke<string[]>("retry_job", { id, fallback }),
-  listJobs: (page = 0) => invoke<JobRecord[]>("list_jobs", { page }),
+  /** Newest first; `beforeSeq` = the smallest `seq` already loaded (omit for the first page). */
+  listJobs: (beforeSeq?: number) => invoke<JobRecord[]>("list_jobs", { beforeSeq: beforeSeq ?? null }),
   removeJob: (id: string) => invoke<void>("remove_job", { id }),
   enginesList: () => invoke<EngineRow[]>("engines_list"),
   engineInstall: (id: string) => invoke<void>("engine_install", { id }),
@@ -22,7 +23,7 @@ export const ipc = {
   revealJob: (id: string) => invoke<void>("reveal_job", { id }),
   openJob: (id: string) => invoke<void>("open_job", { id }),
   /** Licence text of the notice at this index of `notices()`: the engine's own file, else the bundled text. */
-  noticeText: (index: number) => invoke<string>("notice_text", { index }),
+  noticeText: (index: number, name: string) => invoke<string>("notice_text", { index, name }),
   notices: () => invoke<Notice[]>("notices"),
 };
 

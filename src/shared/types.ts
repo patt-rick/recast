@@ -57,6 +57,8 @@ export interface JobEvent {
 }
 
 export interface JobRecord {
+  /** Insertion order; the `list_jobs` paging cursor. */
+  seq: number;
   id: string;
   preset_id: string;
   preset_label: string;

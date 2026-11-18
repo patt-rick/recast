@@ -84,32 +84,56 @@ fn text_ring_order_matches_spec() {
     );
 }
 
-#[test]
-fn no_snapshot_outlives_its_preset() {
-    let c = Catalog::parse(BUNDLED).unwrap();
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/presets/snapshots");
+/// Snapshot files in `dir` whose preset id is not in `ids`.
+fn stale_snapshots(dir: &Path, ids: &std::collections::HashSet<String>) -> Vec<String> {
     let prefix = "recast_lib__presets__catalog_tests__";
     let mut stale = Vec::new();
-    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
         if let Some(id) = name
             .strip_prefix(prefix)
             .and_then(|n| n.strip_suffix(".snap"))
-            && c.get(id).is_none()
+            && !ids.contains(id)
         {
             stale.push(name);
         }
     }
+    stale.sort();
+    stale
+}
+
+#[test]
+fn no_snapshot_outlives_its_preset() {
+    let c = Catalog::parse(BUNDLED).unwrap();
+    let ids = c.presets.iter().map(|p| p.id.clone()).collect();
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/presets/snapshots");
+    let stale = stale_snapshots(&dir, &ids);
     assert!(stale.is_empty(), "delete stale snapshots: {stale:?}");
 }
 
 #[test]
 fn stale_snapshot_check_would_notice() {
-    // Guards the guard: the file naming it relies on matches what insta writes.
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/presets/snapshots");
+    // Guards the guard: a snapshot named like insta's, for a preset that doesn't exist.
+    let real = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/presets/snapshots");
     assert!(
-        dir.join("recast_lib__presets__catalog_tests__video-mp3.snap")
-            .is_file()
+        real.join("recast_lib__presets__catalog_tests__video-mp3.snap")
+            .is_file(),
+        "the naming the check relies on matches what insta writes"
+    );
+    let d = tempfile::tempdir().unwrap();
+    for id in ["video-mp3", "nope"] {
+        std::fs::write(
+            d.path()
+                .join(format!("recast_lib__presets__catalog_tests__{id}.snap")),
+            "",
+        )
+        .unwrap();
+    }
+    std::fs::write(d.path().join("unrelated.txt"), "").unwrap();
+    let ids = ["video-mp3".to_string()].into_iter().collect();
+    assert_eq!(
+        stale_snapshots(d.path(), &ids),
+        ["recast_lib__presets__catalog_tests__nope.snap"]
     );
 }
 

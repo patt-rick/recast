@@ -89,9 +89,16 @@ fn kind_for_mime(mime: &str) -> Kind {
     }
 }
 
-/// MPEG-TS packets are 188 bytes and each starts with the sync byte 0x47.
+/// MPEG-TS packets are 188 bytes and each starts with the sync byte 0x47. A capture may
+/// begin mid-packet (sync at some offset < 188), and BDAV/M2TS prefixes each packet with
+/// 4 bytes (stride 192, first sync at offset 4).
 fn looks_like_mpeg_ts(head: &[u8]) -> bool {
-    head.first() == Some(&0x47) && head.get(188).is_none_or(|b| *b == 0x47)
+    let sync = |i: usize| head.get(i) == Some(&0x47);
+    if head.len() < 189 {
+        // Too short to see a second packet: only the first sync byte can be checked.
+        return sync(0);
+    }
+    (0..188).any(|k| sync(k) && sync(k + 188)) || (sync(4) && sync(196))
 }
 
 /// Kind and canonical format from the extension and the first bytes.
@@ -342,6 +349,28 @@ mod tests {
         ts[188] = 0;
         assert_eq!(classify(Path::new("C:/x/app.ts"), &ts).0, Kind::Unknown);
         assert_eq!(classify(Path::new("C:/x/empty.ts"), &[]).0, Kind::Unknown);
+    }
+
+    #[test]
+    fn ts_accepts_offset_starts_and_192_byte_m2ts_packets() {
+        let ts = Path::new("C:/x/clip.ts");
+        // Starts mid-packet: syncs at 37 and 225.
+        let mut off = vec![0u8; 512];
+        off[37] = 0x47;
+        off[225] = 0x47;
+        assert_eq!(classify(ts, &off).0, Kind::Video);
+        // BDAV: 4-byte prefix, stride 192.
+        let mut m2ts = vec![0u8; 512];
+        m2ts[4] = 0x47;
+        m2ts[196] = 0x47;
+        assert_eq!(classify(ts, &m2ts).0, Kind::Video);
+        // A lone 0x47 in a long head is not enough.
+        let mut lone = vec![0u8; 512];
+        lone[10] = 0x47;
+        assert_eq!(classify(ts, &lone).0, Kind::Unknown);
+        // TypeScript source.
+        let src = "import { Greeter } from './g';\nexport const g = new Greeter();\n".repeat(10);
+        assert_eq!(classify(ts, src.as_bytes()).0, Kind::Unknown);
     }
 
     #[test]

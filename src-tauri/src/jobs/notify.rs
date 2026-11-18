@@ -13,6 +13,7 @@ pub struct Notification {
 struct Tally {
     finished: usize,
     ok: usize,
+    skipped: usize,
     failed: usize,
 }
 
@@ -45,7 +46,8 @@ impl Notifier {
             let t = self.batches.entry(ev.batch_id.clone()).or_default();
             t.finished += 1;
             match status {
-                "done" | "skipped" => t.ok += 1,
+                "done" => t.ok += 1,
+                "skipped" => t.skipped += 1,
                 "failed" => t.failed += 1,
                 _ => {}
             }
@@ -53,14 +55,21 @@ impl Notifier {
                 return None;
             }
             let t = self.batches.remove(&ev.batch_id).expect("tally exists");
-            if t.ok == 0 && t.failed == 0 {
+            if t.ok == 0 && t.failed == 0 && t.skipped == 0 {
                 return None;
             }
-            let mut title = format!(
-                "{} file{} converted",
-                t.ok,
-                if t.ok == 1 { "" } else { "s" }
-            );
+            let mut title = if t.ok == 0 && t.skipped > 0 {
+                "Nothing to convert".to_string()
+            } else {
+                format!(
+                    "{} file{} converted",
+                    t.ok,
+                    if t.ok == 1 { "" } else { "s" }
+                )
+            };
+            if t.skipped > 0 {
+                title.push_str(&format!(" · {} skipped", t.skipped));
+            }
             if t.failed > 0 {
                 title.push_str(&format!(" · {} failed", t.failed));
             }
@@ -152,6 +161,31 @@ mod tests {
         assert_eq!(
             n.on_event(&ev("b", 3, "done")).unwrap().title,
             "2 files converted · 1 failed"
+        );
+    }
+
+    #[test]
+    fn batch_toast_counts_skips_separately() {
+        let mut n = Notifier::default();
+        for s in ["done", "skipped", "skipped"] {
+            let _ = n.on_event(&ev("b", 4, s));
+        }
+        assert_eq!(
+            n.on_event(&ev("b", 4, "skipped")).unwrap().title,
+            "1 file converted · 3 skipped"
+        );
+        for s in ["skipped", "skipped"] {
+            assert_eq!(n.on_event(&ev("c", 3, s)), None);
+        }
+        assert_eq!(
+            n.on_event(&ev("c", 3, "skipped")).unwrap().title,
+            "Nothing to convert · 3 skipped"
+        );
+        let _ = n.on_event(&ev("d", 3, "done"));
+        let _ = n.on_event(&ev("d", 3, "skipped"));
+        assert_eq!(
+            n.on_event(&ev("d", 3, "failed")).unwrap().title,
+            "1 file converted · 1 skipped · 1 failed"
         );
     }
 }

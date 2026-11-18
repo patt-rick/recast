@@ -350,7 +350,10 @@ impl JobManager {
                 .map_err(|e| e.to_string())?;
             self.inner.emit(&job, "queued", None, None, None, None);
             ids.push(job.id.clone());
-            if skip_same && let Some(msg) = same_format_message(preset, &job.inputs[0]) {
+            if skip_same
+                && let Some(msg) =
+                    same_format_message(preset, &job.inputs[0], self.inner.host.as_ref())
+            {
                 self.inner.skip_same_format(&job, msg);
                 continue;
             }
@@ -963,8 +966,11 @@ fn detected_format(path: &Path) -> String {
 }
 
 /// "<name> is already PNG." when the input is already the preset's output format.
-fn same_format_message(preset: &Preset, input: &Path) -> Option<String> {
-    let format = detected_format(input);
+/// Uses the same facts as the pad (ffprobe refines ALAC `.m4a` to "alac").
+fn same_format_message(preset: &Preset, input: &Path, host: &dyn EngineHost) -> Option<String> {
+    let format = crate::detect::detect(input, &|p| host.probe(p))
+        .map(|i| i.format)
+        .unwrap_or_default();
     (!format.is_empty() && preset.out_format_for(&format) == format)
         .then(|| format!("{} is already {}.", file_name(input), preset.label))
 }
@@ -1264,6 +1270,31 @@ out_naming = "replace_ext"
 passes = [['ok', '{out}']]
 
 [[preset]]
+id = "audio-m4a"
+label = "M4A"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "fake"
+bin = "fake"
+out_ext = "m4a"
+out_naming = "replace_ext"
+passes = [['ok', '{out}']]
+
+[[preset]]
+id = "audio-alac"
+label = "ALAC"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "fake"
+bin = "fake"
+out_ext = "m4a"
+out_format = "alac"
+out_naming = "suffix:alac"
+passes = [['ok', '{out}']]
+
+[[preset]]
 id = "samecopy"
 label = "Same"
 description = "d"
@@ -1358,6 +1389,7 @@ passes = [['ok', '{out}']]
     struct FakeHost {
         exe: PathBuf,
         duration_s: f64,
+        audio_codec: Option<String>,
         slow_done: std::sync::atomic::AtomicBool,
     }
     impl EngineHost for FakeHost {
@@ -1398,7 +1430,7 @@ passes = [['ok', '{out}']]
                 duration_s: Some(self.duration_s),
                 has_audio: true,
                 has_video: true,
-                audio_codec: None,
+                audio_codec: self.audio_codec.clone(),
             })
         }
         fn pdf_pages(&self, _: &Path) -> Option<u32> {
@@ -1463,6 +1495,9 @@ passes = [['ok', '{out}']]
         rig_full(f, 1.0)
     }
     fn rig_full(f: impl FnOnce(&mut Settings), duration_s: f64) -> Rig {
+        rig_codec(f, duration_s, None)
+    }
+    fn rig_codec(f: impl FnOnce(&mut Settings), duration_s: f64, codec: Option<&str>) -> Rig {
         let mut s = Settings::default();
         f(&mut s);
         let events = Arc::new(Collect::default());
@@ -1473,6 +1508,7 @@ passes = [['ok', '{out}']]
             Arc::new(FakeHost {
                 exe: fake_engine(),
                 duration_s,
+                audio_codec: codec.map(String::from),
                 slow_done: Default::default(),
             }),
             history.clone(),
@@ -1801,6 +1837,22 @@ passes = [['ok', '{out}']]
             serde_json::to_value(err.code).unwrap(),
             serde_json::json!("SAME_FORMAT")
         );
+    }
+
+    #[test]
+    fn alac_m4a_is_judged_by_the_probe_not_the_extension() {
+        let r = rig_codec(|_| {}, 1.0, Some("alac"));
+        let a = r.file("a.m4a", b"x");
+        let ids = r
+            .mgr
+            .start_jobs("audio-m4a", std::slice::from_ref(&a))
+            .unwrap();
+        let ev = r.events.wait_end(&ids[0]);
+        assert_eq!(ev.status, "done", "ALAC is not already M4A: {:?}", ev.error);
+        let ids = r.mgr.start_jobs("audio-alac", &[a]).unwrap();
+        let ev = r.events.wait_end(&ids[0]);
+        assert_eq!(ev.status, "skipped");
+        assert_eq!(ev.error.unwrap().code, ErrorCode::SameFormat);
     }
 
     #[test]

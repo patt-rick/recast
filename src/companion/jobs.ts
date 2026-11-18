@@ -104,6 +104,11 @@ export function split(s: JobsState): { active: JobView[]; history: JobView[] } {
 /** Rows per `list_jobs` page (matches the backend). */
 export const PAGE_SIZE = 50;
 
+/** Keyset cursor for the next `list_jobs` page: the smallest `seq` loaded so far. */
+export function nextCursor(prev: number | undefined, records: JobRecord[]): number | undefined {
+  return records.reduce<number | undefined>((m, r) => (m === undefined || r.seq < m ? r.seq : m), prev);
+}
+
 /** Append one more page of history without duplicating rows already shown; `more` is false once a page comes back short. */
 export function appendHistory(s: JobsState, records: JobRecord[]): { state: JobsState; more: boolean } {
   return { state: seed(s, records), more: records.length >= PAGE_SIZE };

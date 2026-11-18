@@ -3,7 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ipc, onJobEvent } from "../shared/ipc";
 import { formatBytes, formatEta } from "../shared/format";
 import type { JobEvent, JobRecord, PadModel } from "../shared/types";
-import { appendHistory, applyEvent, batchSuffix, empty, PAGE_SIZE, remove, seed, split, withRecord, type JobsState, type JobView } from "./jobs";
+import { appendHistory, applyEvent, batchSuffix, empty, nextCursor, PAGE_SIZE, remove, seed, split, withRecord, type JobsState, type JobView } from "./jobs";
 
 type Action =
   | { type: "seed"; records: JobRecord[] }
@@ -38,8 +38,8 @@ export function Activity({ onDrop }: { onDrop: () => void }) {
   const [hovering, setHovering] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Next history page to fetch, and whether the last page was full.
-  const [nextPage, setNextPage] = useState(1);
+  // Smallest history seq loaded so far (keyset cursor), and whether the last page was full.
+  const [cursor, setCursor] = useState<number | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const report = (e: unknown) => setError(String(e));
@@ -47,8 +47,9 @@ export function Activity({ onDrop }: { onDrop: () => void }) {
   onDropRef.current = onDrop;
 
   useEffect(() => {
-    ipc.listJobs(0).then((records) => {
+    ipc.listJobs().then((records) => {
       dispatch({ type: "seed", records });
+      setCursor((c) => nextCursor(c, records));
       setHasMore(records.length >= PAGE_SIZE);
     }).catch((e) => setError(String(e)));
   }, []);
@@ -57,9 +58,9 @@ export function Activity({ onDrop }: { onDrop: () => void }) {
     if (loadingMore) return;
     setLoadingMore(true);
     try {
-      const records = await ipc.listJobs(nextPage);
+      const records = await ipc.listJobs(cursor);
       dispatch({ type: "more", records });
-      setNextPage(nextPage + 1);
+      setCursor(nextCursor(cursor, records));
       setHasMore(records.length >= PAGE_SIZE);
     } catch (e) {
       setError(String(e));
@@ -72,7 +73,7 @@ export function Activity({ onDrop }: { onDrop: () => void }) {
     const off = onJobEvent((e) => {
       dispatch({ type: "event", e });
       if (e.status === "failed") {
-        ipc.listJobs(0).then((rs) => {
+        ipc.listJobs().then((rs) => {
           const r = rs.find((x) => x.id === e.job_id);
           if (r) dispatch({ type: "record", r });
         }).catch((err) => setError(String(err)));

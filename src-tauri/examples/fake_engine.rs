@@ -49,7 +49,9 @@ fn main() {
         "marker" => {
             std::fs::write(&args[2], b"ran").unwrap();
         }
-        // starts a grandchild that hangs, reports its pid, then hangs itself
+        // starts a grandchild that hangs, reports its pid (stdout, and the file args[2] if
+        // given: written whole via a rename so a reader never sees half a number), then
+        // hangs itself
         "spawn_child" => {
             #[allow(clippy::zombie_processes)] // deliberate: the test needs an orphan grandchild
             let child = Command::new(std::env::current_exe().unwrap())
@@ -57,6 +59,11 @@ fn main() {
                 .spawn()
                 .unwrap();
             println!("child={}", child.id());
+            if let Some(path) = args.get(2) {
+                let tmp = format!("{path}.tmp");
+                std::fs::write(&tmp, child.id().to_string()).unwrap();
+                std::fs::rename(&tmp, path).unwrap();
+            }
             out.lock().flush().unwrap();
             hang();
         }

@@ -19,7 +19,7 @@ export function Library() {
       return;
     }
     try {
-      const text = await ipc.noticeText(index);
+      const text = await ipc.noticeText(index, name);
       setLicences((l) => ({ ...l, [name]: text }));
     } catch (e) {
       setError(String(e));

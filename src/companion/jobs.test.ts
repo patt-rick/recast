@@ -1,5 +1,5 @@
 import type { JobEvent, JobRecord } from "../shared/types";
-import { appendHistory, applyEvent, batchSuffix, empty, PAGE_SIZE, remove, seed, split, withRecord } from "./jobs";
+import { appendHistory, applyEvent, batchSuffix, empty, nextCursor, PAGE_SIZE, remove, seed, split, withRecord } from "./jobs";
 
 const ev = (over: Partial<JobEvent>): JobEvent => ({
   job_id: "j1", batch_id: "b", batch_size: 1, preset_id: "video-mp3", preset_label: "MP3", file: "holiday.mov",
@@ -7,7 +7,7 @@ const ev = (over: Partial<JobEvent>): JobEvent => ({
 });
 
 const rec = (over: Partial<JobRecord>): JobRecord => ({
-  id: "old", preset_id: "image-png", preset_label: "PNG", inputs: ["C:\\p\\a.jpg", "C:\\p\\b.jpg"], output: null,
+  seq: 1, id: "old", preset_id: "image-png", preset_label: "PNG", inputs: ["C:\\p\\a.jpg", "C:\\p\\b.jpg"], output: null,
   status: "done", error_code: null, error_detail: null, stderr_tail: null, started_at: 1, ended_at: 2, temp_path: null, ...over,
 });
 
@@ -74,6 +74,13 @@ test("withRecord adds the stderr tail; remove drops a job", () => {
   expect(s.byId.j1.stderrTail).toBe("boom");
   s = remove(s, "j1");
   expect(s.order).toEqual([]);
+});
+
+test("the history cursor is the smallest seq loaded so far", () => {
+  expect(nextCursor(undefined, [rec({ seq: 9 }), rec({ seq: 7 })])).toBe(7);
+  expect(nextCursor(7, [rec({ seq: 5 }), rec({ seq: 6 })])).toBe(5);
+  expect(nextCursor(7, [])).toBe(7);
+  expect(nextCursor(undefined, [])).toBeUndefined();
 });
 
 test("load more appends the next page without duplicates and stops on a short page", () => {

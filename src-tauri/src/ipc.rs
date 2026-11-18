@@ -137,10 +137,15 @@ pub async fn retry_job(
 }
 
 #[tauri::command]
-pub async fn list_jobs(state: State<'_, AppState>, page: u32) -> Result<Vec<JobListItem>, String> {
+pub async fn list_jobs(
+    state: State<'_, AppState>,
+    before_seq: Option<i64>,
+) -> Result<Vec<JobListItem>, String> {
     let (history, catalog) = (state.history.clone(), state.catalog.clone());
     blocking(move || {
-        let records = lock(&history).list(page, 50).map_err(|e| e.to_string())?;
+        let records = lock(&history)
+            .list(before_seq, 50)
+            .map_err(|e| e.to_string())?;
         Ok(records
             .into_iter()
             .map(|record| JobListItem {
@@ -357,7 +362,11 @@ fn licence_text(n: &Notice, licenses_dir: &std::path::Path) -> Result<String, St
 
 /// The licence text of the notice at `index` (as listed by `notices`).
 #[tauri::command]
-pub async fn notice_text(state: State<'_, AppState>, index: usize) -> Result<String, String> {
+pub async fn notice_text(
+    state: State<'_, AppState>,
+    index: usize,
+    name: String,
+) -> Result<String, String> {
     let (engines, licence, dir) = (
         state.engines.clone(),
         state.sevenzip_licence.clone(),
@@ -365,12 +374,19 @@ pub async fn notice_text(state: State<'_, AppState>, index: usize) -> Result<Str
     );
     blocking(move || {
         let notices = build_notices(&engines, &licence);
-        let n = notices
-            .get(index)
-            .ok_or_else(|| "That notice no longer exists.".to_string())?;
+        let n = notice_at(&notices, index, &name)?;
         licence_text(n, &dir)
     })
     .await
+}
+
+/// The notice at `index`, provided it is still the one the viewer asked about (the list
+/// can change between listing and opening).
+fn notice_at<'a>(notices: &'a [Notice], index: usize, name: &str) -> Result<&'a Notice, String> {
+    notices
+        .get(index)
+        .filter(|n| n.name == name)
+        .ok_or_else(|| "The list changed; reopen Library.".to_string())
 }
 
 fn build_notices(engines: &Engines, sevenzip_licence: &std::path::Path) -> Vec<Notice> {
@@ -450,6 +466,18 @@ mod tests {
             licence_file: file.map(|f| f.to_string_lossy().into_owned()),
             bundled: false,
         }
+    }
+
+    #[test]
+    fn notice_lookup_checks_the_name_as_well_as_the_index() {
+        let list = [notice("MIT", None)];
+        assert_eq!(
+            notice_at(&list, 0, "Tool").ok().map(|n| &*n.name),
+            Some("Tool")
+        );
+        let stale = "The list changed; reopen Library.";
+        assert_eq!(notice_at(&list, 0, "Other").err().as_deref(), Some(stale));
+        assert_eq!(notice_at(&list, 1, "Tool").err().as_deref(), Some(stale));
     }
 
     fn bundled_dir() -> PathBuf {
