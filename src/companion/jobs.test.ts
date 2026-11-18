@@ -8,7 +8,7 @@ const ev = (over: Partial<JobEvent>): JobEvent => ({
 
 const rec = (over: Partial<JobRecord>): JobRecord => ({
   seq: 1, id: "old", preset_id: "image-png", preset_label: "PNG", inputs: ["C:\\p\\a.jpg", "C:\\p\\b.jpg"], output: null,
-  status: "done", error_code: null, error_detail: null, stderr_tail: null, started_at: 1, ended_at: 2, temp_path: null, ...over,
+  status: "done", error_code: null, error_detail: null, stderr_tail: null, started_at: 1, ended_at: 2, temp_path: null, options: null, ...over,
 });
 
 test("seed builds views from history", () => {

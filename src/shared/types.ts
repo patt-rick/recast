@@ -27,6 +27,10 @@ export interface PresetView {
   engine_name: string;
   engine_status: EngineStatus;
   min_files: number;
+  /** Engine download size in bytes (for "Getting FFmpeg · 84 MB"). */
+  engine_size: number;
+  /** A caution shown in the ring, e.g. GIF from a long video. */
+  warning: string | null;
 }
 
 export interface PadModel {
@@ -71,6 +75,8 @@ export interface JobRecord {
   started_at: number;
   ended_at: number | null;
   temp_path: string | null;
+  /** JSON JobOptions, or null. */
+  options: string | null;
 }
 
 export interface EngineRow {
@@ -111,3 +117,18 @@ export interface Settings {
 }
 
 export type DeepPartial<T> = { [K in keyof T]?: T[K] extends object ? DeepPartial<T[K]> : T[K] };
+
+export type PadMode = "click" | "drag";
+
+export interface PadOpen {
+  paths: string[];
+  mode: PadMode;
+  reduced_transparency: boolean;
+  /** Increments on every open; pad_show / pad_close are no-ops for a stale one. */
+  generation: number;
+}
+
+export interface JobOptions {
+  /** Page ranges for "pdf-extract", e.g. "1-3, 5, 8-". */
+  ranges?: string;
+}
