@@ -1,3 +1,109 @@
+import { useCallback, useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { ipc, onEngineEvent } from "../shared/ipc";
+import { formatBytes } from "../shared/format";
+import type { EngineRow, Notice } from "../shared/types";
+
 export function Library() {
-  return null;
+  const [rows, setRows] = useState<EngineRow[]>([]);
+  const [notices, setNotices] = useState<Notice[]>([]);
+  const [messages, setMessages] = useState<Record<string, string>>({});
+
+  const say = (id: string, msg: string | null) =>
+    setMessages((m) => {
+      const next = { ...m };
+      if (msg) next[id] = msg;
+      else delete next[id];
+      return next;
+    });
+
+  const refresh = useCallback(() => {
+    ipc.enginesList().then(setRows);
+    ipc.notices().then(setNotices);
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  useEffect(() => {
+    const off = onEngineEvent((e) => {
+      if (e.kind === "progress") {
+        setRows((rs) => rs.map((r) => (r.id === e.id ? { ...r, status: { state: "installing", pct: e.pct } } : r)));
+      } else {
+        say(e.id, e.kind === "failed" ? e.error : null);
+        refresh();
+      }
+    });
+    return () => {
+      off.then((f) => f());
+    };
+  }, [refresh]);
+
+  const verify = async (id: string) => {
+    const ok = await ipc.engineVerify(id);
+    say(id, ok ? "Verified: files match what was installed." : "Damaged: download it again to repair.");
+    refresh();
+  };
+
+  const total = rows.reduce((a, r) => a + r.disk_bytes, 0);
+
+  return (
+    <section aria-label="Library">
+      <h2>Converters</h2>
+      <ul className="rows">
+        {rows.map((r) => (
+          <li key={r.id} className="row">
+            <div>
+              <strong>{r.name}</strong> <span className="muted">{r.version} · {r.licence}</span>
+              <div className="muted">{describe(r)}</div>
+              {messages[r.id] && <div className="muted" role="status">{messages[r.id]}</div>}
+            </div>
+            <div className="job-actions">
+              {r.status.state === "not_installed" && <button onClick={() => ipc.engineInstall(r.id).catch((e) => say(r.id, String(e)))}>Download ({formatBytes(r.size)})</button>}
+              {r.status.state === "damaged" && <button onClick={() => ipc.engineInstall(r.id).catch((e) => say(r.id, String(e)))}>Repair</button>}
+              {r.status.state === "installed" && r.status.update_available && <button onClick={() => ipc.engineInstall(r.id).catch((e) => say(r.id, String(e)))}>Update</button>}
+              {r.status.state === "installed" && <button onClick={() => verify(r.id)}>Verify</button>}
+              {(r.status.state === "installed" || r.status.state === "damaged") && (
+                <button className="ghost" onClick={() => ipc.engineRemove(r.id).then(refresh, (e) => say(r.id, String(e)))}>Remove</button>
+              )}
+            </div>
+          </li>
+        ))}
+        <li className="row muted">
+          <span>LibreOffice (Office documents), LaTeX (PDF from text)</span>
+          <span>Coming later</span>
+        </li>
+      </ul>
+      <p className="muted">Disk used: {formatBytes(total)}</p>
+
+      <h2>Third-party notices</h2>
+      <ul className="rows">
+        {notices.map((n) => (
+          <li key={n.name} className="row">
+            <div>
+              <strong>{n.name}</strong> <span className="muted">{n.licence}{n.bundled ? " · included with Recast" : " · downloaded from upstream"}</span>
+            </div>
+            <div className="job-actions">
+              {/* Reveal, not open: licence files are often extensionless (LICENSE, COPYING). */}
+              {n.licence_file && <button onClick={() => ipc.reveal(n.licence_file!)}>Licence</button>}
+              <button onClick={() => openUrl(n.homepage)}>Website</button>
+              {n.source_url && <button onClick={() => openUrl(n.source_url!)}>Source</button>}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function describe(r: EngineRow): string {
+  switch (r.status.state) {
+    case "not_installed":
+      return "Not installed. Downloads the first time you need it.";
+    case "installing":
+      return `Installing · ${Math.round(r.status.pct * 100)}%`;
+    case "installed":
+      return `Installed${r.status.update_available ? ` (${r.status.version}; ${r.version} available)` : ""} · ${formatBytes(r.disk_bytes)}`;
+    case "damaged":
+      return "Damaged";
+  }
 }
