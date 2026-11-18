@@ -113,6 +113,11 @@ impl Leases {
     fn in_use(&self, id: &str) -> bool {
         lock(&self.slots).get(id).is_some_and(|s| s.readers > 0)
     }
+
+    /// Would acquire() return at once, i.e. nothing is installing or removing the engine?
+    fn available(&self, id: &str) -> bool {
+        !lock(&self.slots).get(id).is_some_and(|s| s.writer)
+    }
 }
 
 struct Exclusive {
@@ -209,6 +214,11 @@ impl Engines {
     /// Use an engine: blocks while it is being installed or removed.
     pub fn acquire(&self, id: &str) -> EngineLease {
         self.leases.acquire(id)
+    }
+
+    /// Would `acquire` return at once (no install or remove in progress)?
+    pub fn lease_available(&self, id: &str) -> bool {
+        self.leases.available(id)
     }
 
     /// Is a conversion holding a lease on this engine?
@@ -430,6 +440,18 @@ mod tests {
         assert!(!engines.in_use("tool"));
         engines.remove("tool").unwrap();
         assert_eq!(engines.status("tool"), EngineStatus::NotInstalled);
+    }
+
+    #[test]
+    fn lease_is_unavailable_only_while_an_install_or_remove_runs() {
+        let d = tempfile::tempdir().unwrap();
+        let engines = installed_tool(d.path());
+        assert!(engines.lease_available("tool"));
+        drop(engines.acquire("tool"));
+        let x = engines.leases.exclusive("tool", false).unwrap();
+        assert!(!engines.lease_available("tool"));
+        drop(x);
+        assert!(engines.lease_available("tool"));
     }
 
     #[test]

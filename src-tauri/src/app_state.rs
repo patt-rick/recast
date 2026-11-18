@@ -1,4 +1,5 @@
 //! Builds everything at startup and hands it to Tauri.
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -6,6 +7,7 @@ use crate::lockutil::lock;
 
 use tauri::path::BaseDirectory;
 use tauri::{Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 
 use crate::engines::install::HttpFetcher;
 use crate::engines::manifest::{self, Manifest};
@@ -46,15 +48,22 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     let sevenzip = app.path().resolve("bin/7z.exe", BaseDirectory::Resource)?;
     let sevenzip_licence = app.path().resolve("bin/7zip-License.txt", BaseDirectory::Resource)?;
+    let engine_names: HashMap<String, String> = manifest.engines.iter().map(|e| (e.id.clone(), e.name.clone())).collect();
     let engines = Arc::new(Engines::new(manifest, paths.engines(), sevenzip, Box::new(HttpFetcher)));
     let handle = app.handle().clone();
     engines.set_listener(Arc::new(move |e: EngineEvent| {
-        let name = match &e {
+        let event = match &e {
             EngineEvent::Progress { .. } => "engine://progress",
             EngineEvent::Done { .. } => "engine://done",
             EngineEvent::Failed { .. } => "engine://failed",
         };
-        let _ = handle.emit(name, &e);
+        let _ = handle.emit(event, &e);
+        if let EngineEvent::Failed { id, error } = &e {
+            let name = engine_names.get(id).unwrap_or(id);
+            if let Err(err) = handle.notification().builder().title(format!("Couldn't download {name}")).body(error).show() {
+                log::warn!("notification: {err}");
+            }
+        }
     }));
 
     let history = Arc::new(Mutex::new(History::open(&paths.db())?));

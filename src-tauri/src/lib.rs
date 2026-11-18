@@ -53,8 +53,9 @@ pub fn run() {
             ipc::engine_verify,
             ipc::get_settings,
             ipc::set_settings,
-            ipc::reveal,
-            ipc::open_path,
+            ipc::reveal_job,
+            ipc::open_job,
+            ipc::reveal_notice,
             ipc::notices,
         ])
         .run(tauri::generate_context!())

@@ -95,6 +95,10 @@ pub trait EngineHost: Send + Sync {
     fn ensure(&self, engine: &str, progress: &mut dyn FnMut(f32)) -> Result<(), String>;
     /// Shared use of the engine: it can't be removed or replaced while the lease lives.
     fn acquire(&self, engine: &str) -> EngineLease;
+    /// Would `acquire` return at once? False while Library installs or removes the engine.
+    fn lease_available(&self, _engine: &str) -> bool {
+        true
+    }
     fn bin(&self, engine: &str, bin: &str) -> Option<PathBuf>;
     fn probe(&self, path: &Path) -> Option<Probe>;
     fn pdf_pages(&self, path: &Path) -> Option<u32>;
@@ -420,6 +424,8 @@ impl Inner {
     fn ensure_engine(&self, engine: &str, cancel: &CancelToken, progress: &mut dyn FnMut(&str, Option<f32>)) -> Result<EngineLease, Failure> {
         enum Msg {
             Pct(f32),
+            /// An install or update from Library holds the engine; the lease has to wait.
+            Waiting,
             Done(Result<EngineLease, String>),
         }
         let (tx, rx) = std::sync::mpsc::channel();
@@ -430,9 +436,15 @@ impl Inner {
             let r = (|| {
                 // Library may remove the engine between ensure and acquire: try again.
                 for _ in 0..3 {
+                    if !host.lease_available(&id) {
+                        let _ = tx2.send(Msg::Waiting);
+                    }
                     host.ensure(&id, &mut |p| {
                         let _ = tx2.send(Msg::Pct(p));
                     })?;
+                    if !host.lease_available(&id) {
+                        let _ = tx2.send(Msg::Waiting);
+                    }
                     let lease = host.acquire(&id);
                     if host.is_installed(&id) {
                         return Ok(lease);
@@ -448,6 +460,7 @@ impl Inner {
             }
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(Msg::Pct(p)) => progress("waiting_engine", Some(p)),
+                Ok(Msg::Waiting) => progress("waiting_engine", None),
                 Ok(Msg::Done(Ok(lease))) => return Ok(lease),
                 Ok(Msg::Done(Err(e))) => {
                     return Err(Failure::new(ErrorCode::EngineInstallFailed, format!("Couldn't download the converter: {e}")))
@@ -486,6 +499,7 @@ impl Inner {
             .host
             .bin(&preset.engine, &preset.bin)
             .ok_or_else(|| Failure::new(EngineInstallFailed, "The converter is missing its program. Reinstall it from Library."))?;
+        // Leaving waiting_engine restarts the ETA clock (see execute).
         progress("running", Some(0.0));
 
         // 4. Facts for progress, Shrink and the disk check
@@ -724,6 +738,9 @@ impl EngineHost for crate::engines::Engines {
     fn acquire(&self, engine: &str) -> EngineLease {
         crate::engines::Engines::acquire(self, engine)
     }
+    fn lease_available(&self, engine: &str) -> bool {
+        crate::engines::Engines::lease_available(self, engine)
+    }
     fn bin(&self, engine: &str, bin: &str) -> Option<PathBuf> {
         crate::engines::Engines::bin(self, engine, bin)
     }
@@ -909,6 +926,18 @@ out_naming = "replace_ext"
 passes = [['ok', '{out}']]
 
 [[preset]]
+id = "leasewait"
+label = "Lease wait"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "leasewait"
+bin = "fake"
+out_ext = "txt"
+out_naming = "replace_ext"
+passes = [['ok', '{out}']]
+
+[[preset]]
 id = "slowdl"
 label = "Slow download"
 description = "d"
@@ -923,6 +952,9 @@ passes = [['ok', '{out}']]
 
     /// Engines: "fake" works; "boom" panics in bin(); "broken" fails to install;
     /// "slowdl" takes seconds to install.
+    /// "leasewait": installed, but its lease is taken (a Library update) until this is set.
+    static LEASE_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
     struct FakeHost {
         exe: PathBuf,
         duration_s: f64,
@@ -947,8 +979,14 @@ passes = [['ok', '{out}']]
                 _ => Ok(()),
             }
         }
-        fn acquire(&self, _: &str) -> EngineLease {
+        fn acquire(&self, engine: &str) -> EngineLease {
+            while engine == "leasewait" && !LEASE_FREE.load(std::sync::atomic::Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
             EngineLease::noop()
+        }
+        fn lease_available(&self, engine: &str) -> bool {
+            engine != "leasewait" || LEASE_FREE.load(std::sync::atomic::Ordering::SeqCst)
         }
         fn bin(&self, engine: &str, _: &str) -> Option<PathBuf> {
             assert_ne!(engine, "boom", "simulated bug");
@@ -1226,6 +1264,19 @@ passes = [['ok', '{out}']]
         assert_eq!(err.code, ErrorCode::EngineInstallFailed);
         assert!(err.message.contains("network down"), "{}", err.message);
         assert!(r.events.index_of(&ev.job_id, "waiting_engine") < r.events.index_of(&ev.job_id, "failed"));
+    }
+
+    #[test]
+    fn a_job_waiting_on_an_engine_lease_says_so() {
+        let r = rig();
+        let src = r.file("a.bin", b"a");
+        let id = r.mgr.start_jobs("leasewait", &[src]).unwrap().remove(0);
+        let waiting = r.events.wait_for(&id, &["waiting_engine"]);
+        assert_eq!(waiting.pct, None);
+        LEASE_FREE.store(true, std::sync::atomic::Ordering::SeqCst);
+        let end = r.events.wait_end(&id);
+        assert_eq!(end.status, "done", "{:?}", end.error);
+        assert!(r.events.index_of(&id, "waiting_engine") < r.events.index_of(&id, "done"));
     }
 
     #[test]
