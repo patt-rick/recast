@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Activity } from "./Activity";
+import { router } from "./dragRouter";
 import { Library } from "./Library";
 import { SettingsView } from "./Settings";
+import { Tools } from "./Tools";
 
 const SECTIONS = [
   { id: "activity", label: "Activity" },
+  { id: "tools", label: "Tools" },
   { id: "library", label: "Library" },
   { id: "settings", label: "Settings" },
 ] as const;
@@ -12,6 +16,26 @@ type Section = (typeof SECTIONS)[number]["id"];
 
 export function App() {
   const [section, setSection] = useState<Section>("activity");
+  const sectionRef = useRef(section);
+  sectionRef.current = section;
+
+  // The one drag-drop listener; the router hands events to the section that should get them.
+  useEffect(() => {
+    const off = getCurrentWebview().onDragDropEvent((ev) => {
+      const p = ev.payload;
+      const t = router.targetFor(sectionRef.current);
+      if (p.type === "drop") {
+        if (t === "activity") setSection("activity"); // the ring lives in Activity
+        router.route(t, { type: "drop", paths: p.paths });
+      } else {
+        router.route(t, { type: p.type });
+      }
+    });
+    return () => {
+      off.then((f) => f());
+    };
+  }, []);
+
   return (
     <div className="shell">
       <nav className="sidebar" aria-label="Sections">
@@ -31,7 +55,10 @@ export function App() {
       </nav>
       {/* All views stay mounted so Activity keeps receiving job events. */}
       <main className="content" hidden={section !== "activity"}>
-        <Activity onDrop={() => setSection("activity")} />
+        <Activity />
+      </main>
+      <main className="content" hidden={section !== "tools"}>
+        <Tools />
       </main>
       <main className="content" hidden={section !== "library"}>
         <Library />

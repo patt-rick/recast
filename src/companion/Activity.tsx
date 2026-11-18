@@ -1,8 +1,9 @@
-import { useEffect, useReducer, useRef, useState, type Dispatch } from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { useEffect, useReducer, useState, type Dispatch } from "react";
 import { ipc, onJobEvent } from "../shared/ipc";
-import { formatBytes, formatEta } from "../shared/format";
+import { formatEta } from "../shared/format";
 import type { JobEvent, JobRecord, PadModel } from "../shared/types";
+import { router } from "./dragRouter";
+import { InlineRing } from "./InlineRing";
 import { appendHistory, applyEvent, batchSuffix, empty, nextCursor, PAGE_SIZE, remove, seed, split, withRecord, type JobsState, type JobView } from "./jobs";
 
 type Action =
@@ -32,19 +33,16 @@ interface Dropped {
   pad: PadModel;
 }
 
-export function Activity({ onDrop }: { onDrop: () => void }) {
+export function Activity() {
   const [jobs, dispatch] = useReducer(reducer, empty);
   const [dropped, setDropped] = useState<Dropped | null>(null);
   const [hovering, setHovering] = useState(false);
-  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Smallest history seq loaded so far (keyset cursor), and whether the last page was full.
   const [cursor, setCursor] = useState<number | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const report = (e: unknown) => setError(String(e));
-  const onDropRef = useRef(onDrop);
-  onDropRef.current = onDrop;
 
   useEffect(() => {
     ipc.listJobs().then((records) => {
@@ -84,40 +82,24 @@ export function Activity({ onDrop }: { onDrop: () => void }) {
     };
   }, []);
 
-  useEffect(() => {
-    const off = getCurrentWebview().onDragDropEvent(async (ev) => {
-      const p = ev.payload;
-      if (p.type === "enter" || p.type === "over") setHovering(true);
-      else if (p.type === "leave") setHovering(false);
-      else if (p.type === "drop") {
-        setHovering(false);
-        if (p.paths.length === 0) return;
-        onDropRef.current(); // the picker lives in Activity, so bring it into view
-        try {
-          setError(null);
-          setDropped({ paths: p.paths, pad: await ipc.inspect(p.paths) });
-        } catch (e) {
-          setError(String(e));
+  useEffect(
+    () =>
+      router.subscribe("activity", async (ev) => {
+        if (ev.type === "enter" || ev.type === "over") setHovering(true);
+        else if (ev.type === "leave") setHovering(false);
+        else {
+          setHovering(false);
+          if (ev.paths.length === 0) return;
+          try {
+            setError(null);
+            setDropped({ paths: ev.paths, pad: await ipc.inspect(ev.paths) });
+          } catch (e) {
+            setError(String(e));
+          }
         }
-      }
-    });
-    return () => {
-      off.then((f) => f());
-    };
-  }, []);
-
-  async function start(presetId: string) {
-    if (!dropped || starting) return;
-    setStarting(true);
-    try {
-      await ipc.startJobs(presetId, dropped.paths);
-      setDropped(null);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setStarting(false);
-    }
-  }
+      }),
+    [],
+  );
 
   const { active, history } = split(jobs);
 
@@ -127,7 +109,7 @@ export function Activity({ onDrop }: { onDrop: () => void }) {
         {hovering ? "Release to see conversions" : "Drop files here to convert them"}
       </div>
       {error && <p className="error" role="alert">{error}</p>}
-      {dropped && <PresetPicker dropped={dropped} busy={starting} onPick={start} onClose={() => setDropped(null)} />}
+      {dropped && <InlineRing paths={dropped.paths} model={dropped.pad} onClose={() => setDropped(null)} />}
 
       {active.length > 0 && (
         <>
@@ -156,57 +138,6 @@ export function Activity({ onDrop }: { onDrop: () => void }) {
         </button>
       )}
     </section>
-  );
-}
-
-function PresetPicker({ dropped, busy, onPick, onClose }: { dropped: Dropped; busy: boolean; onPick: (id: string) => void; onClose: () => void }) {
-  const { pad } = dropped;
-  const firstPreset = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    firstPreset.current?.focus();
-  }, [dropped]);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const one = pad.files.length === 1 ? pad.files[0] : null;
-  const meta = one
-    ? [one.format.toUpperCase(), formatBytes(one.size), one.pages ? `${one.pages} pages` : null].filter(Boolean).join(" · ")
-    : `${formatBytes(pad.files.reduce((a, f) => a + f.size, 0))} in total`;
-  return (
-    <div className="picker" role="dialog" aria-label="Choose a conversion">
-      <header>
-        <div>
-          <strong>{one ? one.name : `${pad.files.length} files`}</strong>
-          <div className="muted">{meta}</div>
-        </div>
-        <button className="ghost" onClick={onClose} aria-label="Close">
-          ✕
-        </button>
-      </header>
-      {pad.presets.length === 0 ? (
-        <p className="muted">
-          {pad.files.length === 0
-            ? "Folders aren't supported yet. Drop the files inside instead."
-            : pad.open_in_recast
-              ? "These files are different kinds. Drop each kind separately."
-              : "Recast has no conversions for this file."}
-        </p>
-      ) : (
-        <ul className="presets">
-          {pad.presets.map((p, i) => (
-            <li key={p.id}>
-              <button ref={i === 0 ? firstPreset : undefined} disabled={busy} onClick={() => onPick(p.id)} title={p.description}>
-                <span className="label">{p.label}</span>
-                <span className="desc">{p.description}</span>
-                {p.engine_status.state !== "installed" && <span className="badge">Downloads {p.engine_name}</span>}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
   );
 }
 
