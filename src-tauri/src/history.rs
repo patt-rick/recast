@@ -4,8 +4,8 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
-const SCHEMA_VERSION: &str = "1";
-const COLS: &str = "seq, id, preset_id, inputs, output, status, error_code, error_detail, stderr_tail, started_at, ended_at, temp_path";
+const SCHEMA_VERSION: &str = "2";
+const COLS: &str = "seq, id, preset_id, inputs, output, status, error_code, error_detail, stderr_tail, started_at, ended_at, temp_path, options";
 const UNFINISHED: &str = "('queued','waiting_engine','running')";
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -23,6 +23,8 @@ pub struct JobRecord {
     pub started_at: i64,
     pub ended_at: Option<i64>,
     pub temp_path: Option<String>,
+    /// JSON JobOptions (page ranges) or None.
+    pub options: Option<String>,
 }
 
 #[derive(Default)]
@@ -53,6 +55,7 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<JobRecord> {
         started_at: r.get("started_at")?,
         ended_at: r.get("ended_at")?,
         temp_path: r.get("temp_path")?,
+        options: r.get("options")?,
     })
 }
 
@@ -93,8 +96,16 @@ impl History {
                ended_at INTEGER,
                temp_path TEXT);",
         )?;
+        let has_options: bool = self
+            .conn
+            .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'options'")?
+            .exists([])?;
+        if !has_options {
+            self.conn
+                .execute("ALTER TABLE jobs ADD COLUMN options TEXT", [])?;
+        }
         self.conn.execute(
-            "INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?1)",
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('schema_version', ?1)",
             params![SCHEMA_VERSION],
         )?;
         Ok(())
@@ -118,6 +129,14 @@ impl History {
         self.conn.execute(
             "UPDATE jobs SET status = ?2 WHERE id = ?1",
             params![id, status],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_options(&self, id: &str, options: Option<&str>) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE jobs SET options = ?2 WHERE id = ?1",
+            params![id, options],
         )?;
         Ok(())
     }
@@ -216,6 +235,40 @@ mod tests {
 
     fn h() -> History {
         History::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn options_round_trip_and_old_databases_migrate() {
+        let d = tempfile::tempdir().unwrap();
+        let db = d.path().join("recast.db");
+        {
+            // A schema-1 database, as Plan 1 created it.
+            let c = rusqlite::Connection::open(&db).unwrap();
+            c.execute_batch(
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                 INSERT INTO meta VALUES ('schema_version', '1');
+                 CREATE TABLE jobs (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+                   preset_id TEXT NOT NULL, inputs TEXT NOT NULL, output TEXT, status TEXT NOT NULL,
+                   error_code TEXT, error_detail TEXT, stderr_tail TEXT, started_at INTEGER NOT NULL,
+                   ended_at INTEGER, temp_path TEXT);
+                 INSERT INTO jobs (id, preset_id, inputs, status, started_at)
+                   VALUES ('old', 'pdf-split', '[\"C:\\\\a.pdf\"]', 'done', 1);",
+            )
+            .unwrap();
+        }
+        let h = History::open(&db).unwrap();
+        assert_eq!(h.get("old").unwrap().unwrap().options, None);
+        h.insert("new", "pdf-extract", &["C:\\b.pdf".to_string()], 2)
+            .unwrap();
+        h.set_options("new", Some(r#"{"ranges":"1-3"}"#)).unwrap();
+        assert_eq!(
+            h.get("new").unwrap().unwrap().options.as_deref(),
+            Some(r#"{"ranges":"1-3"}"#)
+        );
+        drop(h);
+        // Opening again is a no-op migration.
+        let h = History::open(&db).unwrap();
+        assert!(h.get("new").unwrap().unwrap().options.is_some());
     }
 
     #[test]

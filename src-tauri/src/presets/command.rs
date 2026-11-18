@@ -243,7 +243,14 @@ mod tests {
         assert_eq!(passes.len(), 3);
         assert_eq!(
             argv(&passes[0]),
-            ["--empty", "--pages", r"C:\docs\report.pdf", "1-3", "--", r"out\pages-1-3.pdf"]
+            [
+                "--empty",
+                "--pages",
+                r"C:\docs\report.pdf",
+                "1-3",
+                "--",
+                r"out\pages-1-3.pdf"
+            ]
         );
         assert_eq!(argv(&passes[2])[3], "8-z");
         assert_eq!(argv(&passes[2])[5], r"out\pages-8-end.pdf");

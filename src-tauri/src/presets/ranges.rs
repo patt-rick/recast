@@ -55,21 +55,32 @@ pub fn parse(s: &str, pages: Option<u32>) -> Result<Vec<PageRange>, String> {
         let r = match p.split_once('-') {
             None => {
                 let n = num(&p, &p)?;
-                PageRange { start: n, end: Some(n) }
+                PageRange {
+                    start: n,
+                    end: Some(n),
+                }
             }
-            Some((a, "")) => PageRange { start: num(a, &p)?, end: None },
+            Some((a, "")) => PageRange {
+                start: num(a, &p)?,
+                end: None,
+            },
             Some((a, b)) => {
                 let (a, b) = (num(a, &p)?, num(b, &p)?);
                 if a > b {
                     return Err(format!("\"{p}\" runs backwards."));
                 }
-                PageRange { start: a, end: Some(b) }
+                PageRange {
+                    start: a,
+                    end: Some(b),
+                }
             }
         };
         if let Some(total) = pages {
             let last = r.end.unwrap_or(r.start);
             if r.start > total || last > total {
-                return Err(format!("This PDF has {total} pages; \"{p}\" goes past the end."));
+                return Err(format!(
+                    "This PDF has {total} pages; \"{p}\" goes past the end."
+                ));
             }
         }
         if !out.contains(&r) {
@@ -106,14 +117,32 @@ mod tests {
     #[test]
     fn rejects_bad_input_with_plain_messages() {
         assert_eq!(parse("", None).unwrap_err(), "Enter pages, e.g. 1-3, 5, 8-");
-        assert_eq!(parse(" , ", None).unwrap_err(), "Enter pages, e.g. 1-3, 5, 8-");
+        assert_eq!(
+            parse(" , ", None).unwrap_err(),
+            "Enter pages, e.g. 1-3, 5, 8-"
+        );
         assert_eq!(parse("0", None).unwrap_err(), "Pages start at 1.");
         assert_eq!(parse("3-1", None).unwrap_err(), "\"3-1\" runs backwards.");
-        assert_eq!(parse("a", None).unwrap_err(), "\"a\" isn't a page number or range.");
-        assert_eq!(parse("-4", None).unwrap_err(), "\"-4\" isn't a page number or range.");
-        assert_eq!(parse("1-2-3", None).unwrap_err(), "\"1-2-3\" isn't a page number or range.");
-        assert_eq!(parse("+5", None).unwrap_err(), "\"+5\" isn't a page number or range.");
-        assert_eq!(parse("99999999999", None).unwrap_err(), "\"99999999999\" isn't a page number or range.");
+        assert_eq!(
+            parse("a", None).unwrap_err(),
+            "\"a\" isn't a page number or range."
+        );
+        assert_eq!(
+            parse("-4", None).unwrap_err(),
+            "\"-4\" isn't a page number or range."
+        );
+        assert_eq!(
+            parse("1-2-3", None).unwrap_err(),
+            "\"1-2-3\" isn't a page number or range."
+        );
+        assert_eq!(
+            parse("+5", None).unwrap_err(),
+            "\"+5\" isn't a page number or range."
+        );
+        assert_eq!(
+            parse("99999999999", None).unwrap_err(),
+            "\"99999999999\" isn't a page number or range."
+        );
     }
 
     #[test]
@@ -130,7 +159,10 @@ mod tests {
     #[test]
     fn caps_the_number_of_ranges() {
         let many: Vec<String> = (1..=201).map(|n| n.to_string()).collect();
-        assert_eq!(parse(&many.join(","), None).unwrap_err(), "At most 200 ranges at a time.");
+        assert_eq!(
+            parse(&many.join(","), None).unwrap_err(),
+            "At most 200 ranges at a time."
+        );
     }
 
     #[test]

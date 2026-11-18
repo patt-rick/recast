@@ -382,11 +382,24 @@ engine = "qpdf"
 bin = "qpdf"
 out_ext = "pdf"
 "#;
-        let ok = format!("{base}tools_only = true\nout_naming = \"folder:pages\"\npasses = [['--empty', '--pages', '{{in}}', '{{range}}', '--', '{{out_dir}}\\{{range_name}}.pdf']]\n");
-        Catalog::parse(&ok).unwrap().validate(&engines(), &keys()).unwrap();
-        let not_tools = format!("{base}out_naming = \"folder:pages\"\npasses = [['--pages', '{{in}}', '{{range}}', '--', '{{out_dir}}\\x.pdf']]\n");
-        let errs = Catalog::parse(&not_tools).unwrap().validate(&engines(), &keys()).unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("needs tools_only")), "{errs:?}");
+        let ok = format!(
+            "{base}tools_only = true\nout_naming = \"folder:pages\"\npasses = [['--empty', '--pages', '{{in}}', '{{range}}', '--', '{{out_dir}}\\{{range_name}}.pdf']]\n"
+        );
+        Catalog::parse(&ok)
+            .unwrap()
+            .validate(&engines(), &keys())
+            .unwrap();
+        let not_tools = format!(
+            "{base}out_naming = \"folder:pages\"\npasses = [['--pages', '{{in}}', '{{range}}', '--', '{{out_dir}}\\x.pdf']]\n"
+        );
+        let errs = Catalog::parse(&not_tools)
+            .unwrap()
+            .validate(&engines(), &keys())
+            .unwrap_err();
+        assert!(
+            errs.iter().any(|e| e.contains("needs tools_only")),
+            "{errs:?}"
+        );
     }
 
     #[test]
@@ -405,7 +418,10 @@ out_naming = "replace_ext"
 warn_over_s = 60
 passes = [['-i', '{in}', '{out}']]
 "#;
-        let errs = Catalog::parse(s).unwrap().validate(&engines(), &keys()).unwrap_err();
+        let errs = Catalog::parse(s)
+            .unwrap()
+            .validate(&engines(), &keys())
+            .unwrap_err();
         assert!(errs.iter().any(|e| e.contains("go together")), "{errs:?}");
     }
 

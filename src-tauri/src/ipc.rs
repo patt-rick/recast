@@ -107,11 +107,12 @@ pub async fn start_jobs(
     state: State<'_, AppState>,
     preset_id: String,
     paths: Vec<String>,
+    options: Option<crate::jobs::JobOptions>,
 ) -> Result<Vec<String>, String> {
     let jobs = state.jobs.clone();
     blocking(move || {
         let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
-        jobs.start_jobs(&preset_id, &paths)
+        jobs.start_jobs(&preset_id, &paths, options.unwrap_or_default())
     })
     .await
 }

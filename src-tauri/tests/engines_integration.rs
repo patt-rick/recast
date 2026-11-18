@@ -13,7 +13,7 @@ use recast_lib::engines::install::{
 };
 use recast_lib::engines::manifest::{BUNDLED, Manifest};
 use recast_lib::history::History;
-use recast_lib::jobs::{Events, JobEvent, JobManager};
+use recast_lib::jobs::{Events, JobEvent, JobManager, JobOptions};
 use recast_lib::presets::{BUNDLED as PRESETS, Catalog};
 use recast_lib::proc::run_capture;
 use recast_lib::settings::Settings;
@@ -143,7 +143,11 @@ fn rig(f: impl Fn(&mut Settings) + Send + Sync + 'static) -> Rig {
 impl Rig {
     fn run(&self, preset: &str, inputs: &[&Path]) -> JobEvent {
         let paths: Vec<PathBuf> = inputs.iter().map(|p| p.to_path_buf()).collect();
-        let id = self.mgr.start_jobs(preset, &paths).unwrap().remove(0);
+        let id = self
+            .mgr
+            .start_jobs(preset, &paths, JobOptions::default())
+            .unwrap()
+            .remove(0);
         self.events.wait_end(&id)
     }
     fn done(&self, preset: &str, inputs: &[&Path]) -> PathBuf {
@@ -476,11 +480,19 @@ fn shrink_hits_the_target_and_parallel_jobs_dont_collide() {
     std::fs::copy(&big, &copy).unwrap();
     let ids = [
         r.mgr
-            .start_jobs("video-shrink", std::slice::from_ref(&big))
+            .start_jobs(
+                "video-shrink",
+                std::slice::from_ref(&big),
+                JobOptions::default(),
+            )
             .unwrap()
             .remove(0),
         r.mgr
-            .start_jobs("video-shrink", std::slice::from_ref(&copy))
+            .start_jobs(
+                "video-shrink",
+                std::slice::from_ref(&copy),
+                JobOptions::default(),
+            )
             .unwrap()
             .remove(0),
     ];
@@ -584,6 +596,33 @@ fn pdf_presets() {
     if c.status == "done" {
         qpdf_check(Path::new(c.out_path.as_deref().unwrap()));
     }
+    assert!(fx.leftovers().is_empty());
+}
+
+// pdf-extract: "1, 2-" on the 3-page fixture gives page-1.pdf (1 page) and pages-2-end.pdf (2 pages).
+#[test]
+fn pdf_extract_splits_by_page_ranges() {
+    let fx = Fixtures::new();
+    let r = rig(|_| {});
+    let pdf = fx.p("three.pdf");
+    let id = r
+        .mgr
+        .start_jobs(
+            "pdf-extract",
+            std::slice::from_ref(&pdf),
+            JobOptions {
+                ranges: Some("1, 2-".into()),
+            },
+        )
+        .unwrap()
+        .remove(0);
+    let ev = r.events.wait_end(&id);
+    assert_eq!(ev.status, "done", "{:?}", ev.error);
+    let folder = PathBuf::from(ev.out_path.unwrap());
+    assert!(folder.to_string_lossy().ends_with("pages)"), "{folder:?}");
+    assert_eq!(npages(&folder.join("page-1.pdf")), 1);
+    assert_eq!(npages(&folder.join("pages-2-end.pdf")), 2);
+    assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 2);
     assert!(fx.leftovers().is_empty());
 }
 

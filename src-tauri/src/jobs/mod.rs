@@ -13,7 +13,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::detect::{Probe, classify, ext_of, read_head};
 pub use crate::engines::EngineLease;
@@ -121,6 +121,19 @@ fn file_name(p: &Path) -> String {
         .unwrap_or_else(|| p.display().to_string())
 }
 
+/// Per-job choices that aren't settings (spec deviation 2): page ranges for Split by pages.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+pub struct JobOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ranges: Option<String>,
+}
+
+impl JobOptions {
+    fn is_empty(&self) -> bool {
+        self.ranges.is_none()
+    }
+}
+
 #[derive(Clone)]
 struct Job {
     id: String,
@@ -129,6 +142,7 @@ struct Job {
     preset_id: String,
     inputs: Vec<PathBuf>,
     fallback: bool,
+    options: JobOptions,
 }
 
 impl Job {
@@ -248,8 +262,13 @@ impl JobManager {
     }
 
     /// One job per file, or one job for all files when the preset is multi-file.
-    pub fn start_jobs(&self, preset_id: &str, paths: &[PathBuf]) -> Result<Vec<String>, String> {
-        self.enqueue(preset_id, paths, false)
+    pub fn start_jobs(
+        &self,
+        preset_id: &str,
+        paths: &[PathBuf],
+        options: JobOptions,
+    ) -> Result<Vec<String>, String> {
+        self.enqueue(preset_id, paths, false, options)
     }
 
     /// Start queued jobs if there's room (call after the concurrency setting changes).
@@ -263,7 +282,12 @@ impl JobManager {
             .map_err(|e| e.to_string())?
             .ok_or("That job is no longer in the list.")?;
         let paths: Vec<PathBuf> = rec.inputs.iter().map(PathBuf::from).collect();
-        self.enqueue(&rec.preset_id, &paths, fallback)
+        let options: JobOptions = rec
+            .options
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_default();
+        self.enqueue(&rec.preset_id, &paths, fallback, options)
     }
 
     pub fn cancel(&self, id: &str) {
@@ -306,6 +330,7 @@ impl JobManager {
         preset_id: &str,
         paths: &[PathBuf],
         fallback: bool,
+        options: JobOptions,
     ) -> Result<Vec<String>, String> {
         let preset = self
             .inner
@@ -314,6 +339,14 @@ impl JobManager {
             .ok_or_else(|| format!("Unknown conversion '{preset_id}'."))?;
         if paths.is_empty() {
             return Err("No files to convert.".into());
+        }
+        if preset.per_range() {
+            let text = options.ranges.as_deref().unwrap_or("");
+            // The page count makes "past the end" an early, plain error when qpdf is installed.
+            let pages = paths.first().and_then(|p| self.inner.host.pdf_pages(p));
+            crate::presets::ranges::parse(text, pages)?;
+        } else if !options.is_empty() {
+            return Err("This conversion doesn't take page ranges.".into());
         }
         let abs: Vec<PathBuf> = paths
             .iter()
@@ -339,6 +372,7 @@ impl JobManager {
                 preset_id: preset_id.to_string(),
                 inputs,
                 fallback,
+                options: options.clone(),
             };
             let inputs_str: Vec<String> = job
                 .inputs
@@ -348,6 +382,12 @@ impl JobManager {
             lock(&self.inner.history)
                 .insert(&job.id, preset_id, &inputs_str, now())
                 .map_err(|e| e.to_string())?;
+            if !job.options.is_empty() {
+                let json = serde_json::to_string(&job.options).map_err(|e| e.to_string())?;
+                lock(&self.inner.history)
+                    .set_options(&job.id, Some(&json))
+                    .map_err(|e| e.to_string())?;
+            }
             self.inner.emit(&job, "queued", None, None, None, None);
             ids.push(job.id.clone());
             if skip_same
@@ -491,7 +531,17 @@ impl Inner {
         let mut started = Instant::now();
         let mut last_emit = Instant::now() - Duration::from_secs(1);
         let mut last_status = String::new();
+        // Engines without a progress source get an indeterminate rim, not a fake 0 %.
+        let indeterminate = self
+            .catalog
+            .get(&job.preset_id)
+            .is_some_and(|p| p.progress == ProgressKind::None);
         let mut progress = |status: &str, pct: Option<f32>| {
+            let pct = if indeterminate && status == "running" {
+                None
+            } else {
+                pct
+            };
             let changed = status != last_status;
             if !changed && last_emit.elapsed() < Duration::from_millis(100) {
                 return;
@@ -842,6 +892,15 @@ impl Inner {
             job.inputs.clone()
         };
         let in_dir = first.parent().unwrap_or(Path::new("."));
+        let ranges = if preset.per_range() {
+            crate::presets::ranges::parse(
+                job.options.ranges.as_deref().unwrap_or(""),
+                self.host.pdf_pages(first),
+            )
+            .map_err(|e| Failure::new(SourceUnreadable, e))?
+        } else {
+            Vec::new()
+        };
         let passes = build_command(
             preset,
             &BuildInput {
@@ -849,7 +908,7 @@ impl Inner {
                 in_dir,
                 out_ext: &out_ext,
                 vars: &vars,
-                ranges: &[],
+                ranges: &ranges,
             },
         )
         .map_err(|e| Failure::new(SourceUnreadable, e))?;
@@ -1389,6 +1448,20 @@ bin = "fake"
 out_ext = "txt"
 out_naming = "replace_ext"
 passes = [['ok', '{out}']]
+
+[[preset]]
+id = "ranged"
+label = "Ranged"
+description = "d"
+icon = "i"
+kinds = ["unknown"]
+engine = "fake"
+bin = "fake"
+keep_same_format = true
+tools_only = true
+out_ext = "txt"
+out_naming = "folder:parts"
+passes = [['ok', '{out_dir}\{range_name}.txt', '{range}']]
 "#;
 
     /// Engines: "fake" works; "boom" panics in bin(); "broken" fails to install;
@@ -1554,7 +1627,10 @@ passes = [['ok', '{out}']]
             v
         }
         fn run(&self, preset: &str, files: &[PathBuf]) -> JobEvent {
-            let ids = self.mgr.start_jobs(preset, files).unwrap();
+            let ids = self
+                .mgr
+                .start_jobs(preset, files, JobOptions::default())
+                .unwrap();
             self.events.wait_end(&ids[0])
         }
     }
@@ -1581,6 +1657,68 @@ passes = [['ok', '{out}']]
             .iter()
             .any(|e| e.status == "running" && e.pct.unwrap_or(0.0) > 0.0);
         assert!(saw_progress);
+    }
+
+    #[test]
+    fn ranged_jobs_need_valid_ranges_and_keep_them_for_retry() {
+        let r = rig();
+        let input = r.file("doc.pdf", b"%PDF-1.7\n");
+        let err = r
+            .mgr
+            .start_jobs(
+                "ranged",
+                std::slice::from_ref(&input),
+                JobOptions::default(),
+            )
+            .unwrap_err();
+        assert_eq!(err, "Enter pages, e.g. 1-3, 5, 8-");
+        let bad = JobOptions {
+            ranges: Some("3-1".into()),
+        };
+        assert_eq!(
+            r.mgr
+                .start_jobs("ranged", std::slice::from_ref(&input), bad)
+                .unwrap_err(),
+            "\"3-1\" runs backwards."
+        );
+        let opts = JobOptions {
+            ranges: Some("1-2, 4".into()),
+        };
+        let id = r
+            .mgr
+            .start_jobs("ranged", std::slice::from_ref(&input), opts)
+            .unwrap()
+            .remove(0);
+        let rec = lock(&r.history).get(&id).unwrap().unwrap();
+        assert_eq!(rec.options.as_deref(), Some(r#"{"ranges":"1-2, 4"}"#));
+        let ev = r.events.wait_end(&id);
+        assert_eq!(ev.status, "done", "{:?}", ev.error);
+        // A5: a preset with no progress source reports an indeterminate rim while running.
+        assert!(
+            r.events
+                .evs
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.job_id == id && e.status == "running")
+                .all(|e| e.pct.is_none())
+        );
+        let again = r.mgr.retry(&id, false).unwrap().remove(0);
+        let rec2 = lock(&r.history).get(&again).unwrap().unwrap();
+        assert_eq!(rec2.options, rec.options);
+    }
+
+    #[test]
+    fn options_are_refused_by_presets_that_take_none() {
+        let r = rig();
+        let input = r.file("a.bin", b"x");
+        let opts = JobOptions {
+            ranges: Some("1".into()),
+        };
+        assert_eq!(
+            r.mgr.start_jobs("ok", &[input], opts).unwrap_err(),
+            "This conversion doesn't take page ranges."
+        );
     }
 
     #[test]
@@ -1627,8 +1765,16 @@ passes = [['ok', '{out}']]
         let r = rig_with(|s| s.jobs.concurrency = 1);
         let a = r.file("a.bin", b"a");
         let b = r.file("b.bin", b"b");
-        let first = r.mgr.start_jobs("slow", &[a]).unwrap().remove(0);
-        let second = r.mgr.start_jobs("ok", &[b]).unwrap().remove(0);
+        let first = r
+            .mgr
+            .start_jobs("slow", &[a], JobOptions::default())
+            .unwrap()
+            .remove(0);
+        let second = r
+            .mgr
+            .start_jobs("ok", &[b], JobOptions::default())
+            .unwrap()
+            .remove(0);
         r.events.wait_for(&first, &["running"]);
         r.mgr.cancel(&second);
         assert_eq!(r.events.wait_end(&second).status, "cancelled");
@@ -1642,7 +1788,10 @@ passes = [['ok', '{out}']]
         let r = rig_with(|s| s.jobs.concurrency = 1);
         let a = r.file("a.bin", b"a");
         let b = r.file("b.bin", b"b");
-        let ids = r.mgr.start_jobs("ok", &[a, b]).unwrap();
+        let ids = r
+            .mgr
+            .start_jobs("ok", &[a, b], JobOptions::default())
+            .unwrap();
         r.events.wait_end(&ids[0]);
         r.events.wait_end(&ids[1]);
         assert!(r.events.index_of(&ids[1], "running") > r.events.index_of(&ids[0], "done"));
@@ -1660,7 +1809,10 @@ passes = [['ok', '{out}']]
         let r = rig();
         let a = r.file("a.bin", b"a");
         let b = r.file("b.bin", b"b");
-        let ids = r.mgr.start_jobs("merge", &[a, b]).unwrap();
+        let ids = r
+            .mgr
+            .start_jobs("merge", &[a, b], JobOptions::default())
+            .unwrap();
         assert_eq!(ids.len(), 1);
         let ev = r.events.wait_end(&ids[0]);
         assert!(ev.out_path.unwrap().ends_with("merged.txt"));
@@ -1764,7 +1916,11 @@ passes = [['ok', '{out}']]
     fn a_job_waiting_on_an_engine_lease_says_so() {
         let r = rig();
         let src = r.file("a.bin", b"a");
-        let id = r.mgr.start_jobs("leasewait", &[src]).unwrap().remove(0);
+        let id = r
+            .mgr
+            .start_jobs("leasewait", &[src], JobOptions::default())
+            .unwrap()
+            .remove(0);
         let waiting = r.events.wait_for(&id, &["waiting_engine"]);
         assert_eq!(waiting.pct, None);
         LEASE_FREE.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -1777,7 +1933,11 @@ passes = [['ok', '{out}']]
     fn cancel_while_waiting_for_an_engine_download() {
         let r = rig();
         let src = r.file("a.bin", b"a");
-        let id = r.mgr.start_jobs("slowdl", &[src]).unwrap().remove(0);
+        let id = r
+            .mgr
+            .start_jobs("slowdl", &[src], JobOptions::default())
+            .unwrap()
+            .remove(0);
         r.events.wait_for(&id, &["waiting_engine"]);
         let t = Instant::now();
         r.mgr.cancel(&id);
@@ -1823,7 +1983,10 @@ passes = [['ok', '{out}']]
         let r = rig();
         let png = r.file("a.png", b"x");
         let jpg = r.file("b.jpg", b"y");
-        let ids = r.mgr.start_jobs("topng", &[png, jpg]).unwrap();
+        let ids = r
+            .mgr
+            .start_jobs("topng", &[png, jpg], JobOptions::default())
+            .unwrap();
         let skipped = r.events.wait_end(&ids[0]);
         assert_eq!(skipped.status, "skipped");
         let err = skipped.error.unwrap();
@@ -1855,11 +2018,14 @@ passes = [['ok', '{out}']]
         let a = r.file("a.m4a", b"x");
         let ids = r
             .mgr
-            .start_jobs("audio-m4a", std::slice::from_ref(&a))
+            .start_jobs("audio-m4a", std::slice::from_ref(&a), JobOptions::default())
             .unwrap();
         let ev = r.events.wait_end(&ids[0]);
         assert_eq!(ev.status, "done", "ALAC is not already M4A: {:?}", ev.error);
-        let ids = r.mgr.start_jobs("audio-alac", &[a]).unwrap();
+        let ids = r
+            .mgr
+            .start_jobs("audio-alac", &[a], JobOptions::default())
+            .unwrap();
         let ev = r.events.wait_end(&ids[0]);
         assert_eq!(ev.status, "skipped");
         assert_eq!(ev.error.unwrap().code, ErrorCode::SameFormat);
@@ -1980,7 +2146,10 @@ passes = [['hang']]
         );
         let src = d.path().join("a.bin");
         fs::write(&src, b"a").unwrap();
-        let id = mgr.start_jobs("tool-hang", &[src]).unwrap().remove(0);
+        let id = mgr
+            .start_jobs("tool-hang", &[src], JobOptions::default())
+            .unwrap()
+            .remove(0);
         let deadline = Instant::now() + Duration::from_secs(30);
         while !engines.in_use("tool") {
             assert!(Instant::now() < deadline, "the job never took a lease");
