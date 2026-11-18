@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState, type Dispatch } from "react";
+import { useEffect, useReducer, useRef, useState, type Dispatch } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ipc, onJobEvent } from "../shared/ipc";
 import { formatBytes, formatEta } from "../shared/format";
@@ -14,7 +14,7 @@ type Action =
 function reducer(s: JobsState, a: Action): JobsState {
   switch (a.type) {
     case "seed":
-      return seed(a.records);
+      return seed(s, a.records);
     case "event":
       return applyEvent(s, a.e);
     case "record":
@@ -29,11 +29,15 @@ interface Dropped {
   pad: PadModel;
 }
 
-export function Activity() {
+export function Activity({ onDrop }: { onDrop: () => void }) {
   const [jobs, dispatch] = useReducer(reducer, empty);
   const [dropped, setDropped] = useState<Dropped | null>(null);
   const [hovering, setHovering] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const report = (e: unknown) => setError(String(e));
+  const onDropRef = useRef(onDrop);
+  onDropRef.current = onDrop;
 
   useEffect(() => {
     ipc.listJobs(0).then((records) => dispatch({ type: "seed", records })).catch((e) => setError(String(e)));
@@ -46,7 +50,7 @@ export function Activity() {
         ipc.listJobs(0).then((rs) => {
           const r = rs.find((x) => x.id === e.job_id);
           if (r) dispatch({ type: "record", r });
-        });
+        }).catch((err) => setError(String(err)));
       }
     });
     return () => {
@@ -62,6 +66,7 @@ export function Activity() {
       else if (p.type === "drop") {
         setHovering(false);
         if (p.paths.length === 0) return;
+        onDropRef.current(); // the picker lives in Activity, so bring it into view
         try {
           setError(null);
           setDropped({ paths: p.paths, pad: await ipc.inspect(p.paths) });
@@ -76,12 +81,15 @@ export function Activity() {
   }, []);
 
   async function start(presetId: string) {
-    if (!dropped) return;
+    if (!dropped || starting) return;
+    setStarting(true);
     try {
       await ipc.startJobs(presetId, dropped.paths);
       setDropped(null);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setStarting(false);
     }
   }
 
@@ -93,14 +101,14 @@ export function Activity() {
         {hovering ? "Release to see conversions" : "Drop files here to convert them"}
       </div>
       {error && <p className="error" role="alert">{error}</p>}
-      {dropped && <PresetPicker dropped={dropped} onPick={start} onClose={() => setDropped(null)} />}
+      {dropped && <PresetPicker dropped={dropped} busy={starting} onPick={start} onClose={() => setDropped(null)} />}
 
       {active.length > 0 && (
         <>
           <h2>Running</h2>
           <ul className="jobs">
             {active.map((j) => (
-              <JobRow key={j.id} job={j} dispatch={dispatch} />
+              <JobRow key={j.id} job={j} dispatch={dispatch} report={report} />
             ))}
           </ul>
         </>
@@ -112,7 +120,7 @@ export function Activity() {
       ) : (
         <ul className="jobs">
           {history.map((j) => (
-            <JobRow key={j.id} job={j} dispatch={dispatch} />
+            <JobRow key={j.id} job={j} dispatch={dispatch} report={report} />
           ))}
         </ul>
       )}
@@ -120,8 +128,12 @@ export function Activity() {
   );
 }
 
-function PresetPicker({ dropped, onPick, onClose }: { dropped: Dropped; onPick: (id: string) => void; onClose: () => void }) {
+function PresetPicker({ dropped, busy, onPick, onClose }: { dropped: Dropped; busy: boolean; onPick: (id: string) => void; onClose: () => void }) {
   const { pad } = dropped;
+  const firstPreset = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    firstPreset.current?.focus();
+  }, [dropped]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -144,15 +156,17 @@ function PresetPicker({ dropped, onPick, onClose }: { dropped: Dropped; onPick: 
       </header>
       {pad.presets.length === 0 ? (
         <p className="muted">
-          {pad.open_in_recast
-            ? "These files are different kinds. Drop each kind separately."
-            : "Recast has no conversions for this file."}
+          {pad.files.length === 0
+            ? "Folders aren't supported yet. Drop the files inside instead."
+            : pad.open_in_recast
+              ? "These files are different kinds. Drop each kind separately."
+              : "Recast has no conversions for this file."}
         </p>
       ) : (
         <ul className="presets">
-          {pad.presets.map((p) => (
+          {pad.presets.map((p, i) => (
             <li key={p.id}>
-              <button onClick={() => onPick(p.id)} title={p.description}>
+              <button ref={i === 0 ? firstPreset : undefined} disabled={busy} onClick={() => onPick(p.id)} title={p.description}>
                 <span className="label">{p.label}</span>
                 <span className="desc">{p.description}</span>
                 {p.engine_status.state !== "installed" && <span className="badge">Downloads {p.engine_name}</span>}
@@ -185,10 +199,10 @@ function statusLine(j: JobView): string {
   }
 }
 
-function JobRow({ job: j, dispatch }: { job: JobView; dispatch: Dispatch<Action> }) {
+function JobRow({ job: j, dispatch, report }: { job: JobView; dispatch: Dispatch<Action>; report: (e: unknown) => void }) {
   const [open, setOpen] = useState(false);
   const running = j.status === "queued" || j.status === "waiting_engine" || j.status === "running";
-  const removeRow = () => ipc.removeJob(j.id).then(() => dispatch({ type: "remove", id: j.id }));
+  const removeRow = () => ipc.removeJob(j.id).then(() => dispatch({ type: "remove", id: j.id }), report);
   return (
     <li className={`job ${j.status}`}>
       <div className="job-main">
@@ -197,7 +211,7 @@ function JobRow({ job: j, dispatch }: { job: JobView; dispatch: Dispatch<Action>
         </div>
         <div className="job-status">{statusLine(j)}</div>
         {running && (
-          <div className={j.pct == null ? "bar indeterminate" : "bar"} role="progressbar" aria-valuenow={j.pct == null ? undefined : Math.round(j.pct * 100)}>
+          <div className={j.pct == null ? "bar indeterminate" : "bar"} role="progressbar" aria-label={`${j.file} progress`} aria-valuenow={j.pct == null ? undefined : Math.round(j.pct * 100)}>
             <div style={{ width: `${Math.round((j.pct ?? 0) * 100)}%` }} />
           </div>
         )}
@@ -206,18 +220,18 @@ function JobRow({ job: j, dispatch }: { job: JobView; dispatch: Dispatch<Action>
         )}
       </div>
       <div className="job-actions">
-        {running && <button onClick={() => ipc.cancelJob(j.id)}>Cancel</button>}
+        {running && <button onClick={() => ipc.cancelJob(j.id).catch(report)}>Cancel</button>}
         {j.status === "done" && j.outPath && (
           <>
-            <button onClick={() => ipc.reveal(j.outPath!)}>Show in folder</button>
-            <button onClick={() => ipc.open(j.outPath!)}>Open</button>
+            <button onClick={() => ipc.revealJob(j.id).catch(report)}>Show in folder</button>
+            <button onClick={() => ipc.openJob(j.id).catch(report)}>Open</button>
           </>
         )}
         {j.status === "failed" && (j.error?.code === "DEST_UNWRITABLE" || j.error?.code === "DEST_LOCKED") && (
-          <button onClick={() => ipc.retryJob(j.id, true)}>Save to fallback folder</button>
+          <button onClick={() => ipc.retryJob(j.id, true).catch(report)}>Save to fallback folder</button>
         )}
         {(j.status === "failed" || j.status === "cancelled" || j.status === "interrupted") && (
-          <button onClick={() => ipc.retryJob(j.id)}>Retry</button>
+          <button onClick={() => ipc.retryJob(j.id).catch(report)}>Retry</button>
         )}
         {j.status === "failed" && <button onClick={() => setOpen(!open)}>{open ? "Hide details" : "Details"}</button>}
         {!running && (

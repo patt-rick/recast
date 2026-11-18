@@ -31,7 +31,7 @@ export function App() {
       </nav>
       {/* All views stay mounted so Activity keeps receiving job events. */}
       <main className="content" hidden={section !== "activity"}>
-        <Activity />
+        <Activity onDrop={() => setSection("activity")} />
       </main>
       <main className="content" hidden={section !== "library"}>
         <Library />

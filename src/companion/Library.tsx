@@ -8,6 +8,8 @@ export function Library() {
   const [rows, setRows] = useState<EngineRow[]>([]);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [messages, setMessages] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
 
   const say = (id: string, msg: string | null) =>
     setMessages((m) => {
@@ -18,9 +20,26 @@ export function Library() {
     });
 
   const refresh = useCallback(() => {
-    ipc.enginesList().then(setRows);
-    ipc.notices().then(setNotices);
+    ipc.enginesList().then(setRows).catch((e) => setError(String(e)));
+    ipc.notices().then(setNotices).catch((e) => setError(String(e)));
   }, []);
+
+  const setBusy = (id: string, on: boolean) =>
+    setPending((p) => {
+      const next = new Set(p);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  // Download / Repair / Update stay disabled from the click until the engine reports done or failed.
+  const install = (id: string) => {
+    setBusy(id, true);
+    ipc.engineInstall(id).catch((e) => {
+      say(id, String(e));
+      setBusy(id, false);
+    });
+  };
 
   useEffect(refresh, [refresh]);
 
@@ -30,6 +49,7 @@ export function Library() {
         setRows((rs) => rs.map((r) => (r.id === e.id ? { ...r, status: { state: "installing", pct: e.pct } } : r)));
       } else {
         say(e.id, e.kind === "failed" ? e.error : null);
+        setBusy(e.id, false);
         refresh();
       }
     });
@@ -39,18 +59,25 @@ export function Library() {
   }, [refresh]);
 
   const verify = async (id: string) => {
-    const ok = await ipc.engineVerify(id);
-    say(id, ok ? "Verified: files match what was installed." : "Damaged: download it again to repair.");
-    refresh();
+    try {
+      const ok = await ipc.engineVerify(id);
+      say(id, ok ? "Verified: files match what was installed." : "Damaged: download it again to repair.");
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const total = rows.reduce((a, r) => a + r.disk_bytes, 0);
 
   return (
     <section aria-label="Library">
+      {error && <p className="error" role="alert">{error}</p>}
       <h2>Converters</h2>
       <ul className="rows">
-        {rows.map((r) => (
+        {rows.map((r) => {
+          const busy = pending.has(r.id) || r.status.state === "installing";
+          return (
           <li key={r.id} className="row">
             <div>
               <strong>{r.name}</strong> <span className="muted">{r.version} · {r.licence}</span>
@@ -58,16 +85,17 @@ export function Library() {
               {messages[r.id] && <div className="muted" role="status">{messages[r.id]}</div>}
             </div>
             <div className="job-actions">
-              {r.status.state === "not_installed" && <button onClick={() => ipc.engineInstall(r.id).catch((e) => say(r.id, String(e)))}>Download ({formatBytes(r.size)})</button>}
-              {r.status.state === "damaged" && <button onClick={() => ipc.engineInstall(r.id).catch((e) => say(r.id, String(e)))}>Repair</button>}
-              {r.status.state === "installed" && r.status.update_available && <button onClick={() => ipc.engineInstall(r.id).catch((e) => say(r.id, String(e)))}>Update</button>}
+              {r.status.state === "not_installed" && <button disabled={busy} onClick={() => install(r.id)}>Download ({formatBytes(r.size)})</button>}
+              {r.status.state === "damaged" && <button disabled={busy} onClick={() => install(r.id)}>Repair</button>}
+              {r.status.state === "installed" && r.status.update_available && <button disabled={busy} onClick={() => install(r.id)}>Update</button>}
               {r.status.state === "installed" && <button onClick={() => verify(r.id)}>Verify</button>}
               {(r.status.state === "installed" || r.status.state === "damaged") && (
                 <button className="ghost" onClick={() => ipc.engineRemove(r.id).then(refresh, (e) => say(r.id, String(e)))}>Remove</button>
               )}
             </div>
           </li>
-        ))}
+          );
+        })}
         <li className="row muted">
           <span>LibreOffice (Office documents), LaTeX (PDF from text)</span>
           <span>Coming later</span>
@@ -77,14 +105,14 @@ export function Library() {
 
       <h2>Third-party notices</h2>
       <ul className="rows">
-        {notices.map((n) => (
+        {notices.map((n, i) => (
           <li key={n.name} className="row">
             <div>
               <strong>{n.name}</strong> <span className="muted">{n.licence}{n.bundled ? " · included with Recast" : " · downloaded from upstream"}</span>
             </div>
             <div className="job-actions">
               {/* Reveal, not open: licence files are often extensionless (LICENSE, COPYING). */}
-              {n.licence_file && <button onClick={() => ipc.reveal(n.licence_file!)}>Licence</button>}
+              {n.licence_file && <button onClick={() => ipc.revealNotice(i).catch((e) => setError(String(e)))}>Licence</button>}
               <button onClick={() => openUrl(n.homepage)}>Website</button>
               {n.source_url && <button onClick={() => openUrl(n.source_url!)}>Source</button>}
             </div>

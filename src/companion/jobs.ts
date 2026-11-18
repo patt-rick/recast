@@ -3,6 +3,8 @@ import type { JobError, JobEvent, JobRecord, JobStatus } from "../shared/types";
 
 export interface JobView {
   id: string;
+  /** Jobs dropped together; unknown for rows loaded from history. */
+  batchId: string | null;
   presetId: string;
   presetLabel: string;
   file: string;
@@ -26,6 +28,7 @@ export function fromRecord(r: JobRecord): JobView {
   const first = r.inputs[0] ? baseName(r.inputs[0]) : "";
   return {
     id: r.id,
+    batchId: null,
     presetId: r.preset_id,
     presetLabel: r.preset_label,
     file: r.inputs.length > 1 ? `${first} +${r.inputs.length - 1}` : first,
@@ -38,14 +41,28 @@ export function fromRecord(r: JobRecord): JobView {
   };
 }
 
-export function seed(records: JobRecord[]): JobsState {
-  return { order: records.map((r) => r.id), byId: Object.fromEntries(records.map((r) => [r.id, fromRecord(r)])) };
+/** Merge history into what live events already built: events win, history-only rows follow in order. */
+export function seed(s: JobsState, records: JobRecord[]): JobsState {
+  const byId = { ...Object.fromEntries(records.map((r) => [r.id, fromRecord(r)])), ...s.byId };
+  const extra = records.map((r) => r.id).filter((id) => !(id in s.byId));
+  return { order: [...s.order, ...extra], byId };
+}
+
+/** New jobs go on top, but a batch lists in drop order: after the batch's other jobs. */
+function insertNew(s: JobsState, e: JobEvent): string[] {
+  let last = -1;
+  s.order.forEach((id, i) => {
+    if (s.byId[id].batchId === e.batch_id) last = i;
+  });
+  if (last < 0) return [e.job_id, ...s.order];
+  return [...s.order.slice(0, last + 1), e.job_id, ...s.order.slice(last + 1)];
 }
 
 export function applyEvent(s: JobsState, e: JobEvent): JobsState {
   const prev = s.byId[e.job_id];
   const next: JobView = {
     id: e.job_id,
+    batchId: e.batch_id,
     presetId: e.preset_id,
     presetLabel: e.preset_label,
     file: e.file,
@@ -56,7 +73,7 @@ export function applyEvent(s: JobsState, e: JobEvent): JobsState {
     error: e.error,
     stderrTail: prev?.stderrTail ?? null,
   };
-  return { order: prev ? s.order : [e.job_id, ...s.order], byId: { ...s.byId, [e.job_id]: next } };
+  return { order: prev ? s.order : insertNew(s, e), byId: { ...s.byId, [e.job_id]: next } };
 }
 
 export function withRecord(s: JobsState, r: JobRecord): JobsState {

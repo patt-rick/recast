@@ -18,8 +18,11 @@ export const ipc = {
   engineVerify: (id: string) => invoke<boolean>("engine_verify", { id }),
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (patch: DeepPartial<Settings>) => invoke<Settings>("set_settings", { patch }),
-  reveal: (path: string) => invoke<void>("reveal", { path }),
-  open: (path: string) => invoke<void>("open_path", { path }),
+  /** Only a finished job's saved file can be shown or opened; the backend looks it up. */
+  revealJob: (id: string) => invoke<void>("reveal_job", { id }),
+  openJob: (id: string) => invoke<void>("open_job", { id }),
+  /** Shows the licence file of the notice at this index of `notices()`. */
+  revealNotice: (index: number) => invoke<void>("reveal_notice", { index }),
   notices: () => invoke<Notice[]>("notices"),
 };
 

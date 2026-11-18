@@ -12,14 +12,14 @@ const rec = (over: Partial<JobRecord>): JobRecord => ({
 });
 
 test("seed builds views from history", () => {
-  const s = seed([rec({})]);
+  const s = seed(empty, [rec({})]);
   expect(s.order).toEqual(["old"]);
   expect(s.byId.old.file).toBe("a.jpg +1");
   expect(s.byId.old.presetLabel).toBe("PNG");
 });
 
 test("events add new jobs on top and update existing ones", () => {
-  let s = seed([rec({})]);
+  let s = seed(empty, [rec({})]);
   s = applyEvent(s, ev({}));
   expect(s.order).toEqual(["j1", "old"]);
   s = applyEvent(s, ev({ status: "running", pct: 0.5, eta_s: 10 }));
@@ -27,6 +27,26 @@ test("events add new jobs on top and update existing ones", () => {
   s = applyEvent(s, ev({ status: "done", pct: 1, out_path: "C:\\v\\holiday.mp3" }));
   expect(s.order).toEqual(["j1", "old"]);
   expect(s.byId.j1.outPath).toBe("C:\\v\\holiday.mp3");
+});
+
+test("seed merges: applied events win, history-only rows are appended in order", () => {
+  let s = applyEvent(empty, ev({ job_id: "live", status: "running", pct: 0.4 }));
+  s = seed(s, [rec({ id: "live", status: "queued" }), rec({ id: "h1" }), rec({ id: "h2" })]);
+  expect(s.order).toEqual(["live", "h1", "h2"]);
+  expect(s.byId.live.status).toBe("running");
+  expect(s.byId.live.pct).toBe(0.4);
+  expect(s.byId.h2.status).toBe("done");
+});
+
+test("a batch lists in drop order, below newer batches and above older jobs", () => {
+  let s = seed(empty, [rec({ id: "old" })]);
+  s = applyEvent(s, ev({ job_id: "a", batch_id: "b1", batch_size: 3, file: "a.mov" }));
+  s = applyEvent(s, ev({ job_id: "b", batch_id: "b1", batch_size: 3, file: "b.mov" }));
+  s = applyEvent(s, ev({ job_id: "c", batch_id: "b1", batch_size: 3, file: "c.mov" }));
+  expect(s.order).toEqual(["a", "b", "c", "old"]);
+  s = applyEvent(s, ev({ job_id: "x", batch_id: "b2", file: "x.mov" }));
+  s = applyEvent(s, ev({ job_id: "y", batch_id: "b2", batch_size: 2, file: "y.mov" }));
+  expect(s.order).toEqual(["x", "y", "a", "b", "c", "old"]);
 });
 
 test("split separates active jobs from history", () => {
