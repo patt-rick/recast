@@ -16,12 +16,18 @@ use windows::Win32::System::JobObjects::{
     SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+};
 use windows::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetExitCodeProcess, OpenProcess, OpenThread, ResumeThread, PROCESS_QUERY_LIMITED_INFORMATION,
+    THREAD_SUSPEND_RESUME,
 };
 
 /// `CREATE_NO_WINDOW`: engine consoles never flash on screen.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// `CREATE_SUSPENDED`: the main thread waits for `ResumeThread`.
+pub const CREATE_SUSPENDED: u32 = 0x0000_0004;
 
 /// NUL-terminated UTF-16 path. Absolute paths of 248+ chars get the `\?\`
 /// (or `\?\UNC\`) prefix so these Win32 calls work past MAX_PATH.
@@ -76,8 +82,7 @@ impl KillGroup {
         HANDLE(self.raw as *mut c_void)
     }
 
-    /// Assign right after spawn. Engines don't spawn children in their first
-    /// instructions, so the window before assignment is harmless in practice.
+    /// Prefer `spawn_contained`, which assigns before the process runs any code.
     pub fn assign(&self, child: &Child) -> io::Result<()> {
         unsafe { AssignProcessToJobObject(self.handle(), HANDLE(child.as_raw_handle())).map_err(to_io) }
     }
@@ -94,6 +99,41 @@ impl Drop for KillGroup {
         unsafe {
             let _ = CloseHandle(self.handle());
         }
+    }
+}
+
+/// Spawn `cmd` suspended (and windowless), put it in `group`, then let it run, so
+/// no child it starts can escape the group. Overrides any creation flags on `cmd`.
+pub fn spawn_contained(cmd: &mut std::process::Command, group: &KillGroup) -> io::Result<Child> {
+    use std::os::windows::process::CommandExt;
+    let mut child = cmd.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED).spawn()?;
+    let started = group.assign(&child).and_then(|()| resume_process_main_thread(child.id()));
+    if let Err(e) = started {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
+    Ok(child)
+}
+
+/// Resume every thread of a process created with CREATE_SUSPENDED (only the main
+/// thread exists then).
+pub fn resume_process_main_thread(pid: u32) -> io::Result<()> {
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0).map_err(to_io)?;
+        let mut entry = THREADENTRY32 { dwSize: std::mem::size_of::<THREADENTRY32>() as u32, ..Default::default() };
+        let mut resumed = false;
+        let mut more = Thread32First(snap, &mut entry).is_ok();
+        while more {
+            if entry.th32OwnerProcessID == pid
+                && let Ok(t) = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID) {
+                    resumed |= ResumeThread(t) != u32::MAX;
+                    let _ = CloseHandle(t);
+                }
+            more = Thread32Next(snap, &mut entry).is_ok();
+        }
+        let _ = CloseHandle(snap);
+        if resumed { Ok(()) } else { Err(io::Error::other(format!("couldn't resume process {pid}"))) }
     }
 }
 
@@ -177,6 +217,16 @@ mod tests {
         let status = child.wait().unwrap();
         assert!(!status.success());
         assert!(!is_process_alive(pid));
+    }
+
+    #[test]
+    fn spawn_contained_runs_the_process_inside_the_group() {
+        let group = KillGroup::new().unwrap();
+        let mut child = spawn_contained(Command::new("cmd").args(["/c", "exit 7"]).stdout(Stdio::null()), &group).unwrap();
+        assert_eq!(child.wait().unwrap().code(), Some(7), "the suspended main thread was resumed");
+        let mut hung = spawn_contained(Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(Stdio::null()), &group).unwrap();
+        group.kill();
+        assert!(!hung.wait().unwrap().success());
     }
 
     #[test]

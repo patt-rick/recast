@@ -2,7 +2,6 @@
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read};
-use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +38,8 @@ pub struct RunSpec {
     pub stall: Duration,
     /// Total runtime cap for engines that report no progress.
     pub hard_cap: Duration,
+    /// Extra environment variables (e.g. MAGICK_CONFIGURE_PATH for ImageMagick).
+    pub env: Vec<(OsString, OsString)>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -106,19 +107,13 @@ fn absorb(line: Line, tracker: &mut Tracker, tail: &mut VecDeque<String>, last_a
 
 pub fn run(spec: &RunSpec, cancel: &CancelToken, on_pct: &mut dyn FnMut(f32)) -> io::Result<RunResult> {
     let group = platform::KillGroup::new()?;
-    let mut child = Command::new(&spec.program)
-        .args(&spec.args)
-        .current_dir(&spec.cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(platform::CREATE_NO_WINDOW)
-        .spawn()?;
-    if let Err(e) = group.assign(&child) {
-        let _ = child.kill();
-        let _ = child.wait();
-        return Err(e);
+    let mut cmd = Command::new(&spec.program);
+    cmd.args(&spec.args).current_dir(&spec.cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    for (k, v) in &spec.env {
+        cmd.env(k, v);
     }
+    // Suspended until it is in the group, so no grandchild can escape the kill.
+    let mut child = platform::spawn_contained(&mut cmd, &group)?;
     let (tx, rx) = mpsc::channel();
     let readers = [
         spawn_reader(child.stdout.take().expect("piped stdout"), tx.clone(), Line::Out),
@@ -155,8 +150,10 @@ pub fn run(spec: &RunSpec, cancel: &CancelToken, on_pct: &mut dyn FnMut(f32)) ->
     };
     let _ = child.wait();
     group.kill(); // anything the engine left behind would hold our pipes open
+    // The group is dead, so the pipes close; don't hang on a reader regardless.
+    let deadline = Instant::now() + Duration::from_secs(2);
     for r in readers {
-        let _ = r.join();
+        let _ = crate::proc::join_until(r, deadline);
     }
     for line in rx.try_iter() {
         absorb(line, &mut tracker, &mut tail, &mut last_advance, on_pct);
@@ -178,6 +175,7 @@ mod tests {
             duration_s: Some(1.0),
             stall: Duration::from_millis(stall_ms),
             hard_cap: Duration::from_millis(stall_ms),
+            env: vec![],
         }
     }
 
@@ -231,6 +229,16 @@ mod tests {
         let pid: u32 = r.tail.iter().find_map(|l| l.strip_prefix("child=")).expect("child pid in tail").parse().unwrap();
         std::thread::sleep(Duration::from_millis(200));
         assert!(!crate::platform::is_process_alive(pid), "grandchild survived");
+    }
+
+    #[test]
+    fn passes_extra_environment() {
+        let d = tempfile::tempdir().unwrap();
+        let mut s = spec(d.path(), &["print_env", "MAGICK_CONFIGURE_PATH"], ProgressKind::None, 5000);
+        s.env = vec![(OsString::from("MAGICK_CONFIGURE_PATH"), OsString::from(r"C:\magick"))];
+        let r = run(&s, &CancelToken::default(), &mut |_| {}).unwrap();
+        assert_eq!(r.outcome, RunOutcome::Exited(0));
+        assert_eq!(r.tail, [r"C:\magick"]);
     }
 
     #[test]

@@ -5,6 +5,7 @@ pub mod fsutil;
 pub mod history;
 pub mod ipc;
 pub mod jobs;
+pub mod lockutil;
 pub mod logging;
 pub mod pad_model;
 pub mod paths;

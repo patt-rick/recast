@@ -33,6 +33,12 @@ fn main() {
             eprintln!("Invalid data found when processing input");
             std::process::exit(3);
         }
+        "disk_full" => {
+            eprintln!("av_interleaved_write_frame(): No space left on device");
+            std::process::exit(1);
+        }
+        // print the value of environment variable args[2]
+        "print_env" => println!("{}", std::env::var(&args[2]).unwrap_or_default()),
         "hang_after_progress" => {
             println!("out_time_us=100000");
             out.lock().flush().unwrap();
@@ -53,6 +59,12 @@ fn main() {
                 eprintln!("stderr line {i} ................................................................");
             }
             println!("progress=end");
+        }
+        // write args[2] and a folder args[3] holding one image (pandoc --extract-media)
+        "write_media" => {
+            std::fs::write(&args[2], b"![](media/x.png)").unwrap();
+            std::fs::create_dir_all(std::path::Path::new(&args[3]).join("media")).unwrap();
+            std::fs::write(std::path::Path::new(&args[3]).join("media").join("x.png"), b"png").unwrap();
         }
         // write N bytes to args[2]
         "write_out" => std::fs::write(&args[2], vec![0u8; args[3].parse().unwrap()]).unwrap(),
