@@ -2,6 +2,7 @@ pub mod detect;
 pub mod fsutil;
 pub mod paths;
 pub mod platform;
+pub mod presets;
 pub mod settings;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
