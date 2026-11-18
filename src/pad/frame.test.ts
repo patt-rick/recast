@@ -21,7 +21,7 @@ describe("buildFrame", () => {
     const f = buildFrame(base());
     expect(f.slots).toHaveLength(6);
     expect(f.slots[0].mag).toBeCloseTo(1.1);
-    expect(f.slots[0].glassAlpha).toBeCloseTo(1);
+    expect(f.slots[0].opacity).toBeCloseTo(1);
     expect(f.slots[0].symbolColor).toBe("#fff");
     expect(f.slots[2].light).toBe(true);
     expect(f.slots[2].symbolColor).toBe("#1d1d1f");
@@ -32,7 +32,7 @@ describe("buildFrame", () => {
 
   it("starts the open animation small and unmagnified", () => {
     const f = buildFrame(base({ now: 0 }));
-    expect(f.slots[0].glassAlpha).toBe(0);
+    expect(f.slots[0].opacity).toBe(0);
     expect(f.slots[0].mag).toBe(1);
   });
 
@@ -64,8 +64,32 @@ describe("buildFrame", () => {
 
   it("retracts the segments while running and draws a progress rim", () => {
     const f = buildFrame(base({ retract: 1, progress: { pct: 0.5, spin: 0 } }));
-    expect(f.slots[0].glassAlpha).toBe(0);
+    expect(f.slots.every((s) => s.opacity === 0 && s.symbolAlpha === 0)).toBe(true);
     expect(f.ring).toEqual({ pct: 0.5, spin: 0 });
+  });
+});
+
+describe("retract", () => {
+  it("draws no slot below keep 0.2 and keeps the segment shape", () => {
+    for (const retract of [0.81, 0.9, 1]) {
+      const f = buildFrame(base({ retract }));
+      expect(f.slots.every((s) => s.opacity === 0)).toBe(true);
+    }
+    expect(buildFrame(base({ retract: 0.79 })).slots[0].opacity).toBeGreaterThan(0);
+  });
+
+  it("moves radius toward the disc and fades, without shrinking or blur changes", () => {
+    const rad = (r: number) => {
+      const s = buildFrame(base({ retract: r })).slots[0];
+      return { d: Math.hypot(s.sx - 220, s.sy - 220), o: s.opacity, b: s.blurMix, path: s.path };
+    };
+    const a = rad(0), b = rad(0.4), c = rad(0.7);
+    expect(a.d).toBeCloseTo(136);
+    expect(b.d).toBeLessThan(a.d);
+    expect(c.d).toBeLessThan(b.d);
+    expect(b.o).toBeCloseTo(0.6);
+    expect(c.o).toBeCloseTo(0.3);
+    expect(b.b).toBe(1);
   });
 });
 

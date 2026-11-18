@@ -1,7 +1,7 @@
 /** The pad's state machine (spec §4.3). Pure: time comes in on events. */
 import { OPEN_MS } from "./anim";
 import type { Hit } from "./hitTest";
-import { firstActive, isActive, nextActive, type Slot } from "./paging";
+import { firstActive, firstPreset, isActive, nextActive, type Slot } from "./paging";
 
 export const DWELL_MS = 600;
 export const LEAVE_PX = 80;
@@ -40,9 +40,10 @@ export type PadKey = "ArrowLeft" | "ArrowRight" | "Tab" | "ShiftTab" | "Enter" |
 
 export type PadEvent =
   | { type: "open"; pages: Slot[][]; at: number; reducedMotion: boolean }
-  | { type: "pointer"; hit: Hit; at: number }
+  /** `dwell`: only drag-sourced positions arm the More/Back dwell (spec §4.2). */
+  | { type: "pointer"; hit: Hit; at: number; dwell: boolean }
   | { type: "outside"; distance: number; at: number }
-  /** A drop, or a click. */
+  /** A drop, or a click. `none` (outside the ring band) closes the pad; `gap` and `center` do nothing. */
   | { type: "drop"; hit: Hit; at: number }
   | { type: "key"; key: PadKey; at: number }
   | { type: "tick"; at: number }
@@ -74,7 +75,7 @@ export const target = (s: PadState): number | null => (s.phase.name === "targeti
 
 function turnPage(s: PadState, page: number, at: number): PadState {
   const p = Math.max(0, Math.min(s.pages.length - 1, page));
-  return { ...s, page: p, pageAt: at, focus: firstActive(s.pages[p] ?? []), dwell: null, phase: { name: "idle" } };
+  return { ...s, page: p, pageAt: at, focus: firstPreset(s.pages[p] ?? []), dwell: null, phase: { name: "idle" } };
 }
 
 function activate(s: PadState, i: number | null, at: number): PadState {
@@ -125,7 +126,7 @@ export function reduce(s: PadState, e: PadEvent): PadState {
       }
       const kind = currentPage(s)[slot].kind;
       const pages = kind === "more" || kind === "back";
-      const dwell = pages ? (s.dwell?.slot === slot ? s.dwell : { slot, at: e.at }) : null;
+      const dwell = pages && e.dwell ? (s.dwell?.slot === slot ? s.dwell : { slot, at: e.at }) : null;
       return { ...s, dwell, focus: slot, keyboard: false, phase: { name: "targeting", slot } };
     }
     case "outside":
@@ -136,7 +137,7 @@ export function reduce(s: PadState, e: PadEvent): PadState {
     }
     case "drop":
       if (!interactive(s.phase)) return s;
-      if (e.hit.kind === "center") return s;
+      if (e.hit.kind === "center" || e.hit.kind === "gap") return s;
       if (e.hit.kind === "none") return shut(s);
       return activate(s, e.hit.slot, e.at);
     case "key": {
@@ -145,7 +146,7 @@ export function reduce(s: PadState, e: PadEvent): PadState {
       const page = currentPage(s);
       if (e.key === "Enter") return activate(s, s.focus, e.at);
       const dir = e.key === "ArrowRight" || e.key === "Tab" ? 1 : -1;
-      return { ...s, keyboard: true, focus: nextActive(page, s.focus, dir) };
+      return { ...s, keyboard: true, dwell: null, focus: nextActive(page, s.focus, dir) };
     }
     case "started":
       return s.phase.name === "starting" ? { ...s, phase: { name: "running" } } : s;

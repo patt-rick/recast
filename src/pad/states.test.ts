@@ -24,31 +24,58 @@ describe("pad states (§4.3)", () => {
   });
 
   it("targets the slot under the pointer and lets go off the ring", () => {
-    const s = run([open(), { type: "pointer", hit: slot(2), at: 5 }]);
+    const s = run([open(), { type: "pointer", hit: slot(2), at: 5, dwell: false }]);
     expect(s.phase).toEqual({ name: "targeting", slot: 2 });
     expect(s.focus).toBe(2);
-    expect(run([{ type: "pointer", hit: { kind: "none" }, at: 6 }], s).phase.name).toBe("idle");
-    expect(run([{ type: "pointer", hit: { kind: "center" }, at: 6 }], s).phase.name).toBe("idle");
+    expect(run([{ type: "pointer", hit: { kind: "none" }, at: 6, dwell: false }], s).phase.name).toBe("idle");
+    expect(run([{ type: "pointer", hit: { kind: "center" }, at: 6, dwell: false }], s).phase.name).toBe("idle");
   });
 
   it("runs the preset dropped on, ignores the disc, closes on a drop outside", () => {
     expect(run([open(), { type: "drop", hit: slot(1), at: 9 }]).phase).toEqual({ name: "starting", presetId: "p2" });
     expect(run([open(), { type: "drop", hit: { kind: "center" }, at: 9 }]).phase.name).toBe("opening");
     expect(run([open(), { type: "drop", hit: { kind: "none" }, at: 9 }]).phase.name).toBe("closed");
+    // Near misses (ring gaps, the band around the disc) are no-ops.
+    expect(run([open(), { type: "drop", hit: { kind: "gap" }, at: 9 }]).phase.name).toBe("opening");
+    expect(run([open(), { type: "pointer", hit: slot(2), at: 5, dwell: false }, { type: "pointer", hit: { kind: "gap" }, at: 6, dwell: false }]).phase.name).toBe("idle");
+  });
+
+  it("dwell arms only for drag-sourced pointers", () => {
+    const hover = run([open(), { type: "pointer", hit: slot(5), at: 100, dwell: false }]);
+    expect(hover.dwell).toBeNull();
+    expect(run([{ type: "tick", at: 5000 }], hover).page).toBe(0);
+    const drag = run([open(), { type: "pointer", hit: slot(5), at: 100, dwell: true }]);
+    expect(drag.dwell).toEqual({ slot: 5, at: 100 });
+  });
+
+  it("ignores outside and pointer while running, empty drops, early settles", () => {
+    const running = run([open(0, true), { type: "drop", hit: slot(0), at: 1 }, { type: "started" }]);
+    expect(run([{ type: "outside", distance: 200, at: 5 }, { type: "pointer", hit: slot(2), at: 6, dwell: true }], running)).toEqual(running);
+    const three = paginate([p("a"), p("b"), p("c")]);
+    const idle = run([{ type: "open", pages: three, at: 0, reducedMotion: true }, { type: "drop", hit: slot(4), at: 3 }]);
+    expect(idle.phase.name).toBe("idle");
+    expect(run([{ type: "settled", failed: null, at: 4 }], idle).phase.name).toBe("idle");
+    const starting = run([{ type: "drop", hit: slot(0), at: 4 }], idle);
+    expect(run([{ type: "settled", failed: null, at: 5 }], starting).phase.name).toBe("starting");
+  });
+
+  it("a pointer during opening targets", () => {
+    const s = run([open(0), { type: "pointer", hit: slot(1), at: 10, dwell: false }]);
+    expect(s.phase).toEqual({ name: "targeting", slot: 1 });
   });
 
   it("pages with More/Back on click or a 600 ms dwell", () => {
     const more = run([open(), { type: "drop", hit: slot(5), at: 10 }]);
     expect(more.page).toBe(1);
     expect(more.pageAt).toBe(10);
-    expect(more.focus).toBe(0);
+    expect(more.focus).toBe(1); // first preset, not Back
     const back = run([{ type: "drop", hit: slot(0), at: 20 }], more);
     expect(back.page).toBe(0);
-    const hover = run([open(), { type: "pointer", hit: slot(5), at: 100 }, { type: "pointer", hit: slot(5), at: 400 }]);
+    const hover = run([open(), { type: "pointer", hit: slot(5), at: 100, dwell: true }, { type: "pointer", hit: slot(5), at: 400, dwell: true }]);
     expect(run([{ type: "tick", at: 100 + DWELL_MS - 1 }], hover).page).toBe(0);
     expect(run([{ type: "tick", at: 100 + DWELL_MS }], hover).page).toBe(1);
     // Moving off More cancels the dwell.
-    const off = run([{ type: "pointer", hit: slot(4), at: 300 }, { type: "tick", at: 2000 }], hover);
+    const off = run([{ type: "pointer", hit: slot(4), at: 300, dwell: true }, { type: "tick", at: 2000 }], hover);
     expect(off.page).toBe(0);
   });
 
@@ -58,6 +85,11 @@ describe("pad states (§4.3)", () => {
     expect(run([{ type: "key", key: "ShiftTab", at: 3 }], s).focus).toBe(1);
     expect(run([{ type: "key", key: "ArrowLeft", at: 3 }, { type: "key", key: "ArrowLeft", at: 4 }, { type: "key", key: "ArrowLeft", at: 5 }], s).focus).toBe(5);
     expect(run([{ type: "key", key: "Enter", at: 4 }], s).phase).toEqual({ name: "starting", presetId: "p3" });
+    const fresh = run([open(0, true)]);
+    expect(run([{ type: "key", key: "ShiftTab", at: 1 }], { ...fresh, focus: null }).focus).toBe(5);
+    expect(run([{ type: "key", key: "ArrowLeft", at: 1 }], { ...fresh, focus: null }).focus).toBe(5);
+    const armed = run([{ type: "pointer", hit: slot(5), at: 1, dwell: true }], fresh);
+    expect(run([{ type: "key", key: "Tab", at: 2 }], armed).dwell).toBeNull();
     expect(run([{ type: "key", key: "Escape", at: 4 }], s).phase.name).toBe("closed");
   });
 

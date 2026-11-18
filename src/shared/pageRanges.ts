@@ -49,9 +49,11 @@ export function parseRanges(s: string, pages: number | null): RangesResult {
         return { ok: false, error: `This PDF has ${pages} pages; "${p}" goes past the end.` };
       }
     }
-    if (!out.some((x) => x.start === r.start && x.end === r.end)) out.push(r);
+    if (!out.some((x) => x.start === r.start && x.end === r.end)) {
+      if (out.length === MAX_RANGES) return { ok: false, error: `At most ${MAX_RANGES} ranges at a time.` };
+      out.push(r);
+    }
   }
   if (out.length === 0) return { ok: false, error: "Enter pages, e.g. 1-3, 5, 8-" };
-  if (out.length > MAX_RANGES) return { ok: false, error: `At most ${MAX_RANGES} ranges at a time.` };
   return { ok: true, ranges: out };
 }

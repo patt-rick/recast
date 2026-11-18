@@ -50,7 +50,10 @@ export interface SlotFrame {
   sx: number;
   sy: number;
   mag: number;
-  glassAlpha: number;
+  /** Whole-piece opacity: open animation x retract (0.5x for empty slots). */
+  opacity: number;
+  /** Raw -> blurred cross-fade of the open animation (no retract). */
+  blurMix: number;
   light: boolean;
   tint: string;
   glowAlpha: number;
@@ -76,13 +79,15 @@ export function buildFrame(f: FrameInput): Frame {
   const fadeIn = f.reducedMotion ? 1 : easeOutCubic((f.now - f.pageAt) / PAGE_FADE_MS);
   const keep = 1 - f.retract;
   const slots = f.page.map((slot, i): SlotFrame => {
-    const m = materialize(elapsed, i + 1, f.reducedMotion) * keep;
+    const mo = materialize(elapsed, i + 1, f.reducedMotion);
+    const dropped = keep < 0.2;
+    const m = dropped ? 0 : mo * keep;
     const sp = f.springs[i] ?? { h: 0, off: 0 };
     const h = sp.h;
     const hg = f.reducedMotion ? 0 : h; // geometry follows the spring only with motion
     const ca = slotAngle(i);
-    const hs = (STEP / 2) * (1 + 0.04 * hg) * lerp(0.55, 1, m);
-    const th = TH * (1 + 0.08 * hg) * lerp(0.8, 1, m);
+    const hs = (STEP / 2) * (1 + 0.04 * hg) * lerp(0.55, 1, mo);
+    const th = TH * (1 + 0.08 * hg) * lerp(0.8, 1, mo);
     const off = f.reducedMotion ? 0 : sp.off;
     const r = lerp(DISC_R, R, keep);
     const cx = CX + off * Math.cos(ca), cy = CY + off * Math.sin(ca);
@@ -100,8 +105,9 @@ export function buildFrame(f: FrameInput): Frame {
       path: rsector(cx, cy, r, Math.max(0.01, th), ca, hs, GAP, RC),
       sx: cx + r * Math.cos(ca),
       sy: cy + r * Math.sin(ca),
-      mag: lerp(1, 1.1 + 0.05 * hg, m),
-      glassAlpha: empty ? 0.5 * m : m,
+      mag: lerp(1, 1.1 + 0.05 * hg, mo),
+      opacity: empty ? 0.5 * m : m,
+      blurMix: mo,
       light,
       tint: empty ? `rgba(255,255,255,${(0.03 * m).toFixed(3)})` : tint,
       glowAlpha: empty ? 0 : h * (light ? 0.3 : 0.9),

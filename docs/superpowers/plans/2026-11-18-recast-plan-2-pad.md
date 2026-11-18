@@ -3955,7 +3955,8 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, class
   // Pointer → hit test (mouse here, or an external drag position).
   const pos = external ?? pointer;
   useEffect(() => {
-    dispatch({ type: "pointer", hit: pos ? hitTest(pos.x, pos.y, tgt) : { kind: "none" }, at: performance.now() });
+    // dwell only for drag-sourced positions (spec §4.2): `external != null`.
+    dispatch({ type: "pointer", hit: pos ? hitTest(pos.x, pos.y, tgt) : { kind: "none" }, at: performance.now(), dwell: external != null });
     // tgt is deliberately not a dependency: it would re-dispatch on every target change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pos?.x, pos?.y, dispatch]);
@@ -4015,7 +4016,8 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, class
           solid: L.glass ? null : L.solid, reducedMotion: s.reducedMotion, pointer: L.pos, retract,
           progress: busy ? { pct: L.batch.pct, spin: s.reducedMotion ? 0 : (now / 1000) * Math.PI * 1.6 } : null,
         });
-        probe(() => draw(ctx, frame, L.glass, dpr, L.thumbUrl ? null : (model.files[0]?.kind ?? "unknown")));
+        // fallbackKind must be null unless the phase is opening/idle/targeting (the kind glyph would overlap the DOM ✓/⚠).
+          probe(() => draw(ctx, frame, L.glass, dpr, L.thumbUrl || !["opening", "idle", "targeting"].includes(s.phase.name) ? null : (model.files[0]?.kind ?? "unknown")));
       }
       raf = requestAnimationFrame(loop);
     };

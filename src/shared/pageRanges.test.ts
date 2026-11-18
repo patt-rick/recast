@@ -38,5 +38,7 @@ describe("parseRanges (mirror of presets/ranges.rs)", () => {
   it("caps the number of ranges", () => {
     const many = Array.from({ length: 201 }, (_, i) => String(i + 1)).join(",");
     expect(err(many)).toBe("At most 200 ranges at a time.");
+    // Fails as soon as the 201st distinct range is added, before later parts are parsed.
+    expect(err(`${many},abc`)).toBe("At most 200 ranges at a time.");
   });
 });

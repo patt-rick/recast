@@ -30,9 +30,20 @@ export function firstActive(page: Slot[]): number | null {
   return i < 0 ? null : i;
 }
 
+export function lastActive(page: Slot[]): number | null {
+  for (let i = page.length - 1; i >= 0; i--) if (isActive(page[i])) return i;
+  return null;
+}
+
+/** First preset on the page, else the first active slot. */
+export function firstPreset(page: Slot[]): number | null {
+  const i = page.findIndex((s) => s.kind === "preset");
+  return i < 0 ? firstActive(page) : i;
+}
+
 /** Next targetable slot clockwise (dir 1) or anticlockwise (−1), wrapping. */
 export function nextActive(page: Slot[], from: number | null, dir: 1 | -1): number | null {
-  if (from == null) return firstActive(page);
+  if (from == null) return dir === 1 ? firstActive(page) : lastActive(page);
   for (let k = 1; k <= N; k++) {
     const i = (((from + dir * k) % N) + N) % N;
     if (isActive(page[i])) return i;

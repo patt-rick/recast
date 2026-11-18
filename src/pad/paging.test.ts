@@ -41,6 +41,7 @@ describe("keyboard order", () => {
     expect(nextActive(page, 2, 1)).toBe(0);
     expect(nextActive(page, 0, -1)).toBe(2);
     expect(nextActive(page, null, 1)).toBe(0);
+    expect(nextActive(page, null, -1)).toBe(2);
     expect(firstActive(paginate([])[0])).toBeNull();
   });
 });

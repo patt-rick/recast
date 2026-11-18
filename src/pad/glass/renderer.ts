@@ -31,7 +31,8 @@ interface Piece {
   ox: number;
   oy: number;
   mag: number;
-  alpha: number;
+  opacity: number;
+  blurMix: number;
   light: boolean;
   tint: string;
   glowAlpha: number;
@@ -40,19 +41,22 @@ interface Piece {
 }
 
 function drawGlass(ctx: CanvasRenderingContext2D, dpr: number, g: GlassSource | null, solid: Frame["solid"], q: Piece, glow: Frame["glow"], rim: CanvasGradient) {
-  if (q.alpha <= 0.001) return;
-  // Shadow: 0 8 16 .16 and 0 1 2 .12, cast by an opaque fill under the glass.
+  if (q.opacity <= 0.001) return;
+  // Shadow: 0 8 16 .16 and 0 1 2 .12 (canvas shadows ignore the transform, so scale by dpr).
+  // With glass, opaque black fills cast it; solid casts the long shadow from its one and only fill.
   ctx.save();
-  ctx.globalAlpha = q.alpha;
+  ctx.globalAlpha = q.opacity;
   ctx.fillStyle = g ? "#000" : SOLID[solid ?? "dark"];
   ctx.shadowColor = "rgba(0,0,0,0.16)";
-  ctx.shadowBlur = 16;
-  ctx.shadowOffsetY = 8;
+  ctx.shadowBlur = 16 * dpr;
+  ctx.shadowOffsetY = 8 * dpr;
   ctx.fill(q.path);
-  ctx.shadowColor = "rgba(0,0,0,0.12)";
-  ctx.shadowBlur = 2;
-  ctx.shadowOffsetY = 1;
-  ctx.fill(q.path);
+  if (g) {
+    ctx.shadowColor = "rgba(0,0,0,0.12)";
+    ctx.shadowBlur = 2 * dpr;
+    ctx.shadowOffsetY = 1 * dpr;
+    ctx.fill(q.path);
+  }
   ctx.restore();
 
   ctx.save();
@@ -61,15 +65,11 @@ function drawGlass(ctx: CanvasRenderingContext2D, dpr: number, g: GlassSource | 
     ctx.translate(q.ox, q.oy);
     ctx.scale(q.mag, q.mag);
     ctx.translate(-q.ox, -q.oy);
+    ctx.globalAlpha = q.opacity;
     ctx.drawImage(g.raw, 0, 0, SIZE, SIZE);
-    ctx.globalAlpha = q.alpha; // cross-fade raw → blurred (deviation 6)
+    ctx.globalAlpha = q.opacity * q.blurMix; // cross-fade raw to blurred (deviation 6)
     ctx.drawImage(q.light ? g.light : g.dark, 0, 0, SIZE, SIZE);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.globalAlpha = 1;
-  } else {
-    ctx.globalAlpha = q.alpha;
-    ctx.fillStyle = SOLID[solid ?? "dark"];
-    ctx.fill(q.path);
     ctx.globalAlpha = 1;
   }
   ctx.fillStyle = q.tint;
@@ -87,12 +87,12 @@ function drawGlass(ctx: CanvasRenderingContext2D, dpr: number, g: GlassSource | 
   ctx.lineWidth = 7;
   ctx.strokeStyle = `rgba(255,255,255,${q.innerAlpha.toFixed(3)})`;
   ctx.shadowColor = `rgba(255,255,255,${q.innerAlpha.toFixed(3)})`;
-  ctx.shadowBlur = 4.4;
+  ctx.shadowBlur = 4.4 * dpr;
   ctx.stroke(q.path);
   ctx.restore();
 
   ctx.save();
-  ctx.globalAlpha = q.rimAlpha * (q.light ? 0.7 : 1);
+  ctx.globalAlpha = q.rimAlpha;
   ctx.lineWidth = 1.2;
   ctx.strokeStyle = rim;
   ctx.stroke(q.path);
@@ -129,7 +129,7 @@ function slotIcon(s: SlotFrame): { icon: string; label: string } | null {
   }
 }
 
-function drawSymbol(ctx: CanvasRenderingContext2D, s: SlotFrame) {
+function drawSymbol(ctx: CanvasRenderingContext2D, s: SlotFrame, dpr: number) {
   const what = slotIcon(s);
   if (!what || s.symbolAlpha <= 0.001) return;
   ctx.save();
@@ -138,8 +138,8 @@ function drawSymbol(ctx: CanvasRenderingContext2D, s: SlotFrame) {
   ctx.scale(s.symbolScale, s.symbolScale);
   if (s.symbolColor === "#fff") {
     ctx.shadowColor = "rgba(0,0,0,0.3)";
-    ctx.shadowBlur = 2;
-    ctx.shadowOffsetY = 1;
+    ctx.shadowBlur = 2 * dpr * s.symbolScale;
+    ctx.shadowOffsetY = 1 * dpr * s.symbolScale;
   }
   drawIcon(ctx, what.icon, 0, -8, 23, s.symbolColor);
   ctx.fillStyle = s.symbolColor;
@@ -171,13 +171,13 @@ export function draw(ctx: CanvasRenderingContext2D, frame: Frame, glass: GlassSo
   const rim = rimGradient(ctx);
   const d = frame.disc;
   drawGlass(ctx, dpr, glass, frame.solid, {
-    path: P(circlePath(CX, CY, d.r)), ox: CX, oy: CY, mag: d.mag, alpha: d.m, light: d.light,
-    tint: d.light ? `rgba(255,255,255,${(0.35 * d.m).toFixed(3)})` : "rgba(255,255,255,0)",
+    path: P(circlePath(CX, CY, d.r)), ox: CX, oy: CY, mag: d.mag, opacity: d.m, blurMix: d.m, light: d.light,
+    tint: `rgba(255,255,255,${((d.light ? 0.35 : 0.06) * d.m).toFixed(3)})`,
     glowAlpha: 0, innerAlpha: 0.3 * d.m, rimAlpha: d.m,
   }, null, rim);
   for (const s of frame.slots) {
     drawGlass(ctx, dpr, glass, frame.solid, {
-      path: P(s.path), ox: s.sx, oy: s.sy, mag: s.mag, alpha: s.glassAlpha, light: s.light,
+      path: P(s.path), ox: s.sx, oy: s.sy, mag: s.mag, opacity: s.opacity, blurMix: s.blurMix, light: s.light,
       tint: s.tint, glowAlpha: s.glowAlpha, innerAlpha: s.innerAlpha, rimAlpha: s.rimAlpha,
     }, frame.glow, rim);
     if (s.focused) {
@@ -187,7 +187,7 @@ export function draw(ctx: CanvasRenderingContext2D, frame: Frame, glass: GlassSo
       ctx.stroke(P(s.path));
       ctx.restore();
     }
-    drawSymbol(ctx, s);
+    drawSymbol(ctx, s, dpr);
   }
   if (frame.ring) {
     const rr = d.r + 7;
