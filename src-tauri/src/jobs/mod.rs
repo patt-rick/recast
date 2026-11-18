@@ -849,6 +849,7 @@ impl Inner {
                 in_dir,
                 out_ext: &out_ext,
                 vars: &vars,
+                ranges: &[],
             },
         )
         .map_err(|e| Failure::new(SourceUnreadable, e))?;

@@ -38,7 +38,7 @@ fn labels(kind: Kind) -> Vec<String> {
         .unwrap()
         .presets
         .iter()
-        .filter(|p| p.kinds.contains(&kind))
+        .filter(|p| !p.tools_only && p.kinds.contains(&kind))
         .map(|p| p.label.clone())
         .collect()
 }
@@ -156,6 +156,11 @@ fn every_preset_argv_snapshot() {
                 }
             })
             .collect();
+        let ranges = if p.per_range() {
+            crate::presets::ranges::parse("1-2, 4-", None).unwrap()
+        } else {
+            Vec::new()
+        };
         let out_ext = p.out_ext_for(Path::new(&format!("x.{ext}")), "");
         let passes = build_command(
             p,
@@ -164,6 +169,7 @@ fn every_preset_argv_snapshot() {
                 in_dir: Path::new(r"C:\in"),
                 out_ext: &out_ext,
                 vars: &vars,
+                ranges: &ranges,
             },
         )
         .unwrap();

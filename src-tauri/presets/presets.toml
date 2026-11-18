@@ -41,6 +41,8 @@ bin = "ffmpeg"
 progress = "ffmpeg"
 out_ext = "gif"
 out_naming = "replace_ext"
+warn_over_s = 60
+warn_text = "Over a minute long: the GIF will be large and slow to make."
 passes = [['-i', '{in}', '-vf', 'fps={setting.gif.fps},scale={setting.gif.width}:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse', '-loop', '0', '{out}']]
 
 [[preset]]
@@ -442,6 +444,21 @@ ok_exit = [0, 3]
 out_ext = "pdf"
 out_naming = "fixed:merged"
 passes = [['--empty', '--pages', '{inputs}', '--', '{out}']]
+
+[[preset]]
+id = "pdf-extract"
+label = "Split by pages"
+description = "One PDF per page range"
+icon = "split"
+kinds = ["pdf"]
+engine = "qpdf"
+bin = "qpdf"
+ok_exit = [0, 3]
+keep_same_format = true
+tools_only = true
+out_ext = "pdf"
+out_naming = "folder:pages"
+passes = [['--empty', '--pages', '{in}', '{range}', '--', '{out_dir}\{range_name}.pdf']]
 
 # ───────────── Ebooks / text (§5.5) ─────────────
 [[preset]]

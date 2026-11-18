@@ -1,0 +1,22 @@
+---
+source: src/presets/catalog_tests.rs
+expression: argv
+---
+[
+    [
+        "--empty",
+        "--pages",
+        "C:\\in\\café 日本 %[1] -x1.pdf",
+        "1-2",
+        "--",
+        "out\\pages-1-2.pdf",
+    ],
+    [
+        "--empty",
+        "--pages",
+        "C:\\in\\café 日本 %[1] -x1.pdf",
+        "4-z",
+        "--",
+        "out\\pages-4-end.pdf",
+    ],
+]

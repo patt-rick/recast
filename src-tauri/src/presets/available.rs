@@ -83,7 +83,7 @@ pub fn available<'a>(catalog: &'a Catalog, files: &[FileFacts], caps: &Caps) -> 
     let presets: Vec<&Preset> = catalog
         .presets
         .iter()
-        .filter(|p| applies(p, files, caps))
+        .filter(|p| !p.tools_only && applies(p, files, caps))
         .collect();
     let kinds: BTreeSet<Kind> = files.iter().map(|f| f.kind).collect();
     Availability {
@@ -110,6 +110,14 @@ mod tests {
     }
 
     const NO_CAPS: Caps = Caps { magick: None };
+
+    #[test]
+    fn tools_only_presets_never_reach_the_ring() {
+        let c = Catalog::parse(BUNDLED).unwrap();
+        let a = ids(&available(&c, &[f(Kind::Pdf, "pdf", None)], &NO_CAPS));
+        assert!(a.contains(&"pdf-split".to_string()));
+        assert!(!a.contains(&"pdf-extract".to_string()));
+    }
 
     #[test]
     fn mov_with_audio_hides_only_mov() {

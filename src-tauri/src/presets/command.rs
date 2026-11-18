@@ -15,6 +15,8 @@ pub struct BuildInput<'a> {
     pub out_ext: &'a str,
     /// setting.* plus job values: reader, final_stem, video_kbps.
     pub vars: &'a BTreeMap<String, String>,
+    /// Page ranges for per-range presets (empty otherwise).
+    pub ranges: &'a [super::ranges::PageRange],
 }
 
 const FFMPEG_PREFIX: &[&str] = &[
@@ -71,22 +73,40 @@ pub fn build_command(preset: &Preset, b: &BuildInput) -> Result<Vec<Vec<OsString
 
     let mut passes = Vec::new();
     for template in &preset.passes {
-        let mut argv: Vec<OsString> = Vec::new();
-        if preset.bin == "ffmpeg" {
-            argv.extend(FFMPEG_PREFIX.iter().map(OsString::from));
+        let repeats = template
+            .iter()
+            .any(|a| a.contains("{range}") || a.contains("{range_name}"));
+        if repeats && b.ranges.is_empty() {
+            return Err("no page ranges given".into());
         }
-        for arg in template {
-            if arg.contains("{inputs}") {
-                for input in &inputs {
-                    let mut v = values.clone();
-                    v.insert("inputs".into(), input.clone());
-                    argv.push(expand(arg, &v)?.into());
-                }
-            } else {
-                argv.push(expand(arg, &values)?.into());
+        let rounds: Vec<Option<&super::ranges::PageRange>> = if repeats {
+            b.ranges.iter().map(Some).collect()
+        } else {
+            vec![None]
+        };
+        for range in rounds {
+            let mut pass_values = values.clone();
+            if let Some(r) = range {
+                pass_values.insert("range".into(), r.qpdf());
+                pass_values.insert("range_name".into(), r.file_stem());
             }
+            let mut argv: Vec<OsString> = Vec::new();
+            if preset.bin == "ffmpeg" {
+                argv.extend(FFMPEG_PREFIX.iter().map(OsString::from));
+            }
+            for arg in template {
+                if arg.contains("{inputs}") {
+                    for input in &inputs {
+                        let mut v = pass_values.clone();
+                        v.insert("inputs".into(), input.clone());
+                        argv.push(expand(arg, &v)?.into());
+                    }
+                } else {
+                    argv.push(expand(arg, &pass_values)?.into());
+                }
+            }
+            passes.push(argv);
         }
-        passes.push(argv);
     }
     Ok(passes)
 }
@@ -117,6 +137,7 @@ mod tests {
                 in_dir: Path::new(r"C:\in"),
                 out_ext: "mp3",
                 vars: &v,
+                ranges: &[],
             },
         )
         .unwrap();
@@ -152,6 +173,7 @@ mod tests {
                 in_dir: Path::new(r"C:\in"),
                 out_ext: "pdf",
                 vars: &v,
+                ranges: &[],
             },
         )
         .unwrap();
@@ -180,6 +202,7 @@ mod tests {
                 in_dir: Path::new(r"C:\in"),
                 out_ext: "mp3",
                 vars: &v,
+                ranges: &[],
             },
         )
         .unwrap_err();
@@ -196,5 +219,44 @@ mod tests {
                 .contains("{nope}")
         );
         assert_eq!(expand("{in}[0]", &values).unwrap(), "x[0]");
+    }
+
+    #[test]
+    fn a_range_pass_repeats_once_per_range() {
+        use crate::presets::ranges::parse;
+        let c = Catalog::parse(crate::presets::BUNDLED).unwrap();
+        let p = c.get("pdf-extract").unwrap();
+        let inputs = vec![PathBuf::from(r"C:\docs\report.pdf")];
+        let v = vars();
+        let ranges = parse("1-3, 5, 8-", None).unwrap();
+        let passes = build_command(
+            p,
+            &BuildInput {
+                inputs: &inputs,
+                in_dir: Path::new(r"C:\docs"),
+                out_ext: "pdf",
+                vars: &v,
+                ranges: &ranges,
+            },
+        )
+        .unwrap();
+        assert_eq!(passes.len(), 3);
+        assert_eq!(
+            argv(&passes[0]),
+            ["--empty", "--pages", r"C:\docs\report.pdf", "1-3", "--", r"out\pages-1-3.pdf"]
+        );
+        assert_eq!(argv(&passes[2])[3], "8-z");
+        assert_eq!(argv(&passes[2])[5], r"out\pages-8-end.pdf");
+        let none = build_command(
+            p,
+            &BuildInput {
+                inputs: &inputs,
+                in_dir: Path::new(r"C:\docs"),
+                out_ext: "pdf",
+                vars: &v,
+                ranges: &[],
+            },
+        );
+        assert_eq!(none.unwrap_err(), "no page ranges given");
     }
 }

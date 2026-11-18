@@ -2,6 +2,7 @@
 pub mod available;
 pub mod command;
 pub mod naming;
+pub mod ranges;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
@@ -35,6 +36,8 @@ pub const BUILTIN_PLACEHOLDERS: &[&str] = &[
     "reader",
     "final_stem",
     "video_kbps",
+    "range",
+    "range_name",
 ];
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -143,9 +146,25 @@ pub struct Preset {
     /// Exit codes that mean success.
     #[serde(default = "ok_exit_default")]
     pub ok_exit: Vec<i32>,
+    /// Offered only from the Tools page, never in the ring (e.g. Split by page ranges).
+    #[serde(default)]
+    pub tools_only: bool,
+    /// Warn in the ring when an input is longer than this many seconds (GIF).
+    #[serde(default)]
+    pub warn_over_s: Option<f64>,
+    #[serde(default)]
+    pub warn_text: Option<String>,
 }
 
 impl Preset {
+    /// True if a pass repeats once per page range ({range} / {range_name}).
+    pub fn per_range(&self) -> bool {
+        self.passes
+            .iter()
+            .flatten()
+            .any(|a| a.contains("{range}") || a.contains("{range_name}"))
+    }
+
     pub fn is_multi(&self) -> bool {
         self.min_files >= 2
     }
@@ -277,6 +296,14 @@ impl Catalog {
             {
                 errs.push(format!("{id}: output placeholder doesn't match out_naming"));
             }
+            if p.per_range() && !(p.tools_only && p.out_naming.is_folder()) {
+                errs.push(format!(
+                    "{id}: {{range}} needs tools_only and a folder:<name> out_naming"
+                ));
+            }
+            if p.warn_over_s.is_some() != p.warn_text.is_some() {
+                errs.push(format!("{id}: warn_over_s and warn_text go together"));
+            }
         }
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
@@ -340,6 +367,46 @@ passes = [['--empty', '--pages', '{inputs}', '--', '{out}']]
         assert_eq!(m.ok_exit, vec![0, 3]);
         assert_eq!(c.get("v-mp3").unwrap().ok_exit, vec![0]);
         assert_eq!(c.get("v-mp3").unwrap().progress, ProgressKind::Ffmpeg);
+    }
+
+    #[test]
+    fn range_placeholders_need_a_tools_only_folder_preset() {
+        let base = r#"
+[[preset]]
+id = "x"
+label = "X"
+description = "d"
+icon = "split"
+kinds = ["pdf"]
+engine = "qpdf"
+bin = "qpdf"
+out_ext = "pdf"
+"#;
+        let ok = format!("{base}tools_only = true\nout_naming = \"folder:pages\"\npasses = [['--empty', '--pages', '{{in}}', '{{range}}', '--', '{{out_dir}}\\{{range_name}}.pdf']]\n");
+        Catalog::parse(&ok).unwrap().validate(&engines(), &keys()).unwrap();
+        let not_tools = format!("{base}out_naming = \"folder:pages\"\npasses = [['--pages', '{{in}}', '{{range}}', '--', '{{out_dir}}\\x.pdf']]\n");
+        let errs = Catalog::parse(&not_tools).unwrap().validate(&engines(), &keys()).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("needs tools_only")), "{errs:?}");
+    }
+
+    #[test]
+    fn warning_fields_go_together() {
+        let s = r#"
+[[preset]]
+id = "g"
+label = "GIF"
+description = "d"
+icon = "sparkle"
+kinds = ["video"]
+engine = "ffmpeg"
+bin = "ffmpeg"
+out_ext = "gif"
+out_naming = "replace_ext"
+warn_over_s = 60
+passes = [['-i', '{in}', '{out}']]
+"#;
+        let errs = Catalog::parse(s).unwrap().validate(&engines(), &keys()).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("go together")), "{errs:?}");
     }
 
     #[test]
