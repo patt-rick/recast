@@ -1,7 +1,7 @@
 # Recast — Design Spec
 
 - **Date:** 2026-11-18
-- **Status:** Draft, revised after Opus adversarial review; awaiting owner review
+- **Status:** Draft, revised after Opus adversarial review. Plan 1 (core: engines, presets, jobs, history, settings, companion window) is implemented, and this spec was updated to match what was built. Plans 2 (drop pad) and 3 (triggers, shell, installer hooks) are still to do.
 - **Platform (v1):** Windows 10 (2004+) and Windows 11, x64
 - **Visual reference:** `docs/mockups/pad-liquid-glass.html`, variant 4 ("Regular, adapting"). It was built inside the brainstorm companion frame, so open it there for full styling. The geometry and effect values are copied into §4.4.
 
@@ -135,7 +135,7 @@ A 760 × 520 window opened from the tray icon (left-click) or the tray menu. Sam
 2. **Tools:** multi-file jobs that need ordering. **Merge PDFs** and **Images → PDF** use a reorderable list (drag handles, or add files) and a Run button. **Split PDF** takes a page-range field (`1-3, 5, 8-`).
    - Reordering uses a **pointer-event sorter (dnd-kit)**, not HTML5 drag-and-drop: Tauri's `dragDropEnabled` must stay on so the window accepts file drops, and on Windows that disables HTML5 drag-and-drop inside the webview.
 3. **Library:** one row per engine: name, version, size, licence and status (Not installed / Installing x% / Installed / Damaged). Actions: Download, Remove, Verify. A footer shows the total disk used. Future engines (LibreOffice, LaTeX) appear here as "Coming later".
-   - **Third-party notices:** a view listing every engine and bundled component (including `7za`, §6.3) with its licence text, upstream homepage and, for GPL/AGPL/LGPL items, where to get the corresponding source.
+   - **Third-party notices:** a view listing every engine and bundled component (including 7-Zip, §6.3) with its licence text, upstream homepage and, for GPL/AGPL/LGPL items, where to get the corresponding source.
 4. **Settings:**
    - **Triggers:** on/off for each; edge and position for the edge handle.
    - **Defaults:** quality per format (§5).
@@ -157,13 +157,21 @@ On first launch the companion window opens once with a three-step welcome: (1) t
 
 Presets are **data**, in `src-tauri/presets/presets.toml`. Each preset has:
 - `id`, `label`, `description`, `icon`
-- `accepts` (kinds and extensions), `min_files`, `engine`
-- `args` (a template with `{in}`, `{out}` and `{setting.*}` placeholders)
-- `out_ext`, `out_naming` (`replace_ext` | `suffix:<text>` | `folder:<text>`)
+- `kinds` and `exts` (what it accepts), `min_files`, `engine`, `bin` (which of the engine's executables to run)
+- `passes`: a list of argv templates, run in order (Shrink has two). Placeholders are `{in}`, `{out}`, `{out_dir}`, `{tmp}` and `{setting.*}`
+- `out_ext`, `out_naming` (`replace_ext` | `suffix:<text>` | `folder:<text>` | `fixed:<name>`). `fixed:` is for `merged.pdf` and `combined.pdf`
+- `out_format` (optional): the canonical output format when the extension isn't enough, e.g. `alac` for `.m4a`
 - `progress` (`ffmpeg` | `ghostscript_pages` | `none`)
 - `requires` (optional): conditions such as `audio_stream`, or a format capability the installed engine must report (§6.3)
+- `skip_formats` (optional): canonical input formats the preset is hidden for. Image Shrink is hidden for GIF and ICO
+- `keep_same_format`: exempts the preset from same-format hiding (the data-driven form of the Shrink/Compress exception)
+- `hide_when_multi`: hidden when more than one file is dropped
+- `discard_if_not_smaller`: if the output isn't smaller than the input, it is discarded and the job reports `ALREADY_SMALL` (image Shrink, PDF Compress)
+- `stage_inputs`: inputs are staged into the job's temp dir (§6.4). Used for ImageMagick and Ghostscript
+- `extra_outputs` (optional): additional files the command writes that are kept alongside the main output
+- `ok_exit` (optional): exit codes treated as success. qpdf exits 3 on warnings
 
-**Canonical formats.** Extensions map to a canonical format before any comparison: `jpg/jpeg → jpeg`, `tif/tiff → tiff`, `htm/html → html`, `md/markdown → markdown`, `aif/aiff → aiff`, `heic/heif → heif`, `m4a` with ALAC audio → `alac`. **Same-format hiding:** a preset whose output canonical format equals the input's is hidden, **except presets named Shrink or Compress**, which exist to produce the same format.
+**Canonical formats.** Extensions map to a canonical format before any comparison: `jpg/jpeg → jpeg`, `tif/tiff → tiff`, `htm/html → html`, `md/markdown → markdown`, `aif/aiff → aiff`, `heic/heif → heif`, `m4a` with ALAC audio → `alac`. **Same-format hiding:** a preset whose output canonical format equals the input's is hidden, **except presets with `keep_same_format`** (Shrink and Compress), which exist to produce the same format.
 
 The ring order is the order in the table, and anything past five spills into More.
 
@@ -176,7 +184,7 @@ The ring order is the order in the table, and anything past five spills into Mor
 | WebM | ffmpeg | `-c:v libvpx-vp9 -crf 32 -b:v 0 -c:a libopus -b:a 128k` |
 | Shrink | ffmpeg | two-pass x264 to **{target_mb}** MB (default 25), with `-pix_fmt yuv420p` and even dimensions as for MP4. Video kbps = (target_bits × 0.97) / duration − audio 128k; the 3% covers container overhead so the output lands ≤ target. Pass 1: `-pass 1 -passlogfile {tmp}\pass -an -f null NUL`; pass 2: `-pass 2 -passlogfile {tmp}\pass`. The pass logs (`.log`, `.mbtree`) live in the job's temp dir (§6.4), so concurrent jobs never collide, and are deleted with it. **Skipped with a message** if the source is already ≤ target. **Fails up front with a reason** if the result would be < 150 kbps. Output `name (compressed).mp4` |
 | M4A | ffmpeg | `-vn -c:a aac -b:a {aac_kbps}k` (default 192). Hidden when ffprobe finds no audio stream |
-| More → MKV, MOV, Opus, WAV | ffmpeg | MKV remuxes (`-c copy`); MOV re-encodes to H.264/AAC |
+| More → MKV, MOV, Opus, WAV | ffmpeg | MKV remuxes (`-c copy`); MOV re-encodes to H.264/AAC rather than remuxing |
 
 ### 5.2 Audio (`mp3 m4a aac wav flac ogg opus wma aiff aif alac`)
 MP3, M4A, Opus (`libopus 128k`), FLAC, WAV (`pcm_s16le`) · More → ALAC (`.m4a`, `-c:a alac`), AIFF, OGG Vorbis. Audio has no Shrink preset; same-format hiding (§5) removes the preset matching the input.
@@ -191,8 +199,8 @@ All single-image presets read **`{in}[0]`** (first frame or page), so animated G
 | WebP | magick | quality {webp_q} (82), alpha preserved |
 | AVIF | magick | quality {avif_q} (60) |
 | Shrink | magick | longest edge ≤ {shrink_px} (2048) **and** quality 80, same format. `name (compressed).ext` |
-| More → JPEG XL, ICO (16/32/48/256, alpha preserved), TIFF, PDF | magick | ICO keeps transparency (File Converter #63) |
-| **Combine into PDF** (≥2 images) | magick | appears instead of More's PDF entry. Uses drop order; the Tools page allows reordering. Output `combined.pdf` in the first file's folder (collisions → `combined (1).pdf`) |
+| More → JPEG XL, ICO (16/32/48/256, alpha preserved; the image is padded to a square first, not stretched), TIFF, PDF | magick | ICO keeps transparency (File Converter #63) |
+| **Combine into PDF** (≥2 images) | magick | appears instead of More's PDF entry. Uses drop order; the Tools page allows reordering. Output `combined.pdf` (`fixed:`) in the first file's folder (collisions → `combined (1).pdf`) |
 
 ### 5.4 PDF (`pdf`)
 | Preset | Engine | Notes |
@@ -251,11 +259,21 @@ EPUB, DOCX, HTML (`--standalone --embed-resources`, so images are inlined), Mark
 - **The manifest** is bundled in the app: `engines.toml`, one entry per engine per platform. Each entry has:
   - `id`, `name`, `version`, `platform` (`windows-x64`)
   - `url` (an HTTPS, pinned release asset), `sha256`, `size`
-  - `archive` (`zip` | `nsis-extract`), `bins` (logical name → relative exe path), `licence`, `homepage`, `source_url` (for GPL/AGPL/LGPL engines)
-- **Install:** download to `engines\.partial\<id>` with resume, verify SHA-256, then extract into `engines\<id>\<version>\`. The folder is renamed into place atomically. A failed install leaves nothing behind.
-- **Ghostscript (`nsis-extract`):** the free AGPL installer no longer supports silent install (removed in 10.01.0), and running it would show UI and possibly a UAC prompt. Recast **never runs it**. It unpacks the NSIS payload with a **7-Zip extractor (`7za.exe`, LGPL)** shipped inside Recast, then runs `gswin64c -v` from the unpacked folder as an install check. Before a Ghostscript version is pinned, CI verifies that `gswin64c` converts a test PDF when run from an arbitrary folder with no registry entries. Recast doesn't re-host Ghostscript; it downloads the upstream installer.
+  - `archive` (`zip` | `7z` | `nsis`), `bins` (logical name → exe **file name**), `licence`, `homepage`, `source_url` (for GPL/AGPL/LGPL engines)
+  - `check` (optional): a smoke command run after unpacking, e.g. `gswin64c -v`
+  - `capabilities` (optional): a capability probe to run after install (`magick_formats`)
+- **Bins** are exe file names only. After unpacking, the installer finds each one inside the extracted tree and records its relative path and SHA-256, so a change in an archive's inner folder layout doesn't break the manifest.
+- **Install:** download to `engines\.partial\<id>`, verify SHA-256, unpack into a staging folder, run the post-unpack hook and `check`, then rename the staging folder to `engines\<id>\<version>\` atomically. A failed install leaves no engine folder.
+  - **Resume cache:** the downloaded or partly downloaded archive stays in `engines\.partial\<id>\`, so the next attempt resumes instead of starting again. A checksum mismatch deletes it.
+  - **Idle timeout:** HTTP reads time out after 60 s without data. A stalled connection fails the install; it doesn't hang.
+  - **Post-unpack hook:** engine-specific files are written into the staging folder before the rename. If the hook fails, nothing is installed.
+  - **Engine leases:** a job takes a shared lease on its engine after `ensure` and holds it until the job ends. Download, Update, Repair and Remove need exclusive access and are refused ("A conversion is using this converter…") while any lease is held. A job that must repair a Damaged engine waits for running conversions instead.
+  - **Cancelling:** cancelling a job that is waiting for an engine download ends the job at once. The download itself continues for later jobs.
+- **7-Zip:** Recast ships the full **7-Zip 26.06** `7z.exe` and `7z.dll` (LGPL-2.1 + BSD-3 + the unRAR restriction), not the standalone `7za`, because only the full build can unpack NSIS installers. It is used for **every** engine archive (zip, 7z, NSIS), so no Rust zip crate is needed. The files are pinned by SHA-256 in `scripts/fetch-7zip.mjs`. Unpacking has a 10-minute cap.
+- **Ghostscript (`nsis`):** the free AGPL installer no longer supports silent install (removed in 10.01.0), and running it would show UI and possibly a UAC prompt. Recast **never runs it**. It unpacks the NSIS payload with the bundled 7-Zip, then runs `gswin64c -v` (`check`) from the unpacked folder as an install check. Before a Ghostscript version is pinned, CI verifies that `gswin64c` converts a test PDF when run from an arbitrary folder with no registry entries. Recast doesn't re-host Ghostscript; it downloads the upstream installer.
 - **Status:** `NotInstalled | Installing{pct} | Installed{version} | Damaged`. "Damaged" means a bin is missing or `Verify` found a hash mismatch for the extracted exe; a re-download fixes it.
 - **Updating engines** happens through app releases that ship a newer manifest: Library shows "Update available" when the installed version ≠ the manifest version. A remote, unsigned manifest is deliberately **not** used, because it would be a code-execution channel.
+- **ImageMagick hardening:** the same post-unpack hook writes a `policy.xml` with resource limits (memory 1 GiB, map 2 GiB, disk 4 GiB, width and height 32 KP, area 512 MP) and the capabilities file into the staging folder. If either write fails, nothing is installed, and if one is missing later the engine is Damaged. Every `magick` run, including the capability probe, sets `MAGICK_CONFIGURE_PATH` to magick.exe's folder, so the policy always applies.
 - **Capabilities:** after installing ImageMagick, Recast runs `magick -list format` and stores which formats the build can read and write; presets needing an unsupported mode are hidden (§6.2). CI runs the same check before pinning a new ImageMagick and fails if HEIC read, AVIF read/write, JXL read/write or WebP read/write are missing.
 - **Engine sources** (pinned in the manifest by a CI script, `scripts/refresh-engines`):
   - FFmpeg: **gyan.dev "release essentials"**, a version-tagged zip from the `GyanD/codexffmpeg` GitHub releases (e.g. `ffmpeg-9.0.2-essentials_build.zip`). It includes ffprobe, libx264, libmp3lame, libvpx, libopus and libvorbis, and tagged releases don't expire. BtbN's daily builds aren't used, because they are pruned after 14 days
@@ -265,14 +283,15 @@ EPUB, DOCX, HTML (`--standalone --embed-resources`, so images are inlined), Mark
   - Ghostscript: gs w64 installer, unpacked but never run (see above)
 
 ### 6.4 `jobs`
-- **Queue:** FIFO. Concurrency comes from settings (default 2). Multi-file presets count as one job.
-- **Process control:** each job's process runs inside a Windows **Job Object** with `KILL_ON_JOB_CLOSE`. Cancelling, the watchdog, or Recast crashing therefore kills the **entire process tree**. stdout and stderr are both drained continuously, which prevents pipe-full deadlocks; the last 30 stderr lines are kept for Details.
+- **Queue:** FIFO. Concurrency comes from settings (default 2). Multi-file presets count as one job. Batch progress ("n/total files") is shown per job in Activity.
+- **Working directory and paths:** engines run with the job's temp dir (below) as their working directory. `{out}` and `{out_dir}` expand to the *relative* names `out.<ext>` and `out`. Inputs of presets with `stage_inputs` (ImageMagick, Ghostscript) are staged into the temp dir as `in-1.<ext>`, `in-2.<ext>`, … by hard link, or by copy across volumes. That keeps `%`, `[ ]`, a leading `-`, Unicode and paths over 260 characters safe for the two engines that interpret filenames. Other engines get absolute input paths (§6.2).
+- **Process control:** each job's process runs inside a Windows **Job Object** with `KILL_ON_JOB_CLOSE`. Processes (jobs, captures, 7-Zip) are created **suspended**, put in the Job Object, then resumed, so no grandchild can start outside the kill group. Cancelling, the watchdog, or Recast crashing therefore kills the **entire process tree**. Pipe-reader threads are joined for at most 2 s, then detached. stdout and stderr are both drained continuously, which prevents pipe-full deadlocks; the last 30 stderr lines are kept for Details.
 - **Progress:**
   - `ffmpeg`: `-progress pipe:1 -nostats`, giving `out_time_us / duration`. Two-pass jobs report 0–50% for pass 1 and 50–100% for pass 2.
   - `ghostscript_pages`: the "Page N" lines against the page count from Ghostscript's own "Processing pages 1 through N" line, so Compress needs no second engine.
   - `none`: indeterminate. Batches report n/total files.
-- **Watchdog:** for engines that report progress, no progress line for **{stall_timeout} s** (60) marks the job **Stalled** and kills it. For `none` engines, there's a hard cap of 10 min per file, configurable.
-- **Atomic output:** every job gets a hidden temp directory `<dest>\.recast-<job>\` on the same volume. File outputs, folder outputs (To images, Split) and two-pass logs all go inside it. On success, the output file or folder is renamed to its final name, with the collision check repeated at rename time, and the temp dir is removed. On failure or cancel, the whole temp dir is deleted. Temp paths are recorded in `history` before spawning, so leftovers are deleted on the next launch.
+- **Watchdog:** for engines that report progress, no progress line for **{stall_timeout} s** (60) marks the job **Stalled** and kills it. For ffmpeg the stall timer runs only between the first real output timestamp and 99% of the duration; before and after that (GIF palettegen, `+faststart`) only the per-file hard cap applies. For `none` engines, there's a hard cap of 10 min per file, configurable.
+- **Atomic output:** every job gets a hidden temp directory `<dest>\.recast-<job>\` on the same volume. File outputs, folder outputs (To images, Split) and two-pass logs all go inside it. On success, the output file or folder is renamed to its final name, with the collision check repeated at rename time, and the temp dir is removed. On failure or cancel, the whole temp dir is deleted. If the destination path is too long for an engine's working directory (240 characters or more), the temp dir goes in Recast's scratch folder instead, provided that's on the same volume; otherwise the job fails with `DEST_UNWRITABLE` and a short explanation. Temp paths are recorded in `history` before spawning, so leftovers are deleted on the next launch.
 - **Rename retries:** antivirus, OneDrive and Dropbox often lock new files briefly, so a sharing violation on rename is retried with backoff (100 ms, doubling, up to 5 s in total) before the job fails with `DEST_LOCKED`.
 - **Events:** `job://queued|progress|done|failed|cancelled`, all carrying `{ job_id, preset_id, file, pct?, eta_s?, out_path?, error? }`.
 
@@ -284,7 +303,7 @@ EPUB, DOCX, HTML (`--standalone --embed-resources`, so images are inlined), Mark
 - Keeps the last 500 jobs, and the oldest are pruned. "Remove from list" deletes only the row, never files.
 
 ### 6.6 `settings`
-JSON at `%APPDATA%\Recast\settings.json`, with a typed struct, defaults for every field and a `version` for migrations. Unknown fields are kept; invalid values fall back to their defaults and are logged.
+JSON at `%APPDATA%\Recast\settings.json`, with a typed struct, defaults for every field and a `version` for migrations. Unknown fields are kept; invalid values fall back to their defaults and are logged. A read error other than "file missing" never leads to overwriting the file: the loaded settings are read-only for that run, and a corrupt file is kept as `settings.json.bad`.
 
 ### 6.7 `triggers`
 - **Pad window lifecycle:** the pad's WebView2 window is **created hidden at startup** and reused, because creating one on demand takes hundreds of ms and would miss the shake gesture. Opening it means repositioning and calling `ShowWindow(SW_SHOWNOACTIVATE)` when a drag is in progress, or a normal activating show in click mode. OLE re-checks the window under the cursor on every move, so a pad shown mid-drag receives `DragEnter` for the ongoing drag.
@@ -314,6 +333,7 @@ Nothing outside `platform` may call OS APIs directly.
 
 ### 6.10 `shell` and single instance
 - "Open with Recast" is registered under `HKCU\Software\Classes\*\shell\Recast` (no admin rights), with command `"<exe>" --pad "%1"` and **`MultiSelectModel=Player`**. Without it, Explorer hides a command-line verb when more than 15 items are selected; with it, the limit is 100.
+- `tauri-plugin-single-instance` is registered from Plan 1: a second copy only focuses the existing window, because its crash recovery would otherwise delete the first copy's live temp dirs. Argv forwarding arrives with the shell work in Plan 3.
 - Explorer starts one process per selected file. `tauri-plugin-single-instance` forwards them to the running instance, which uses a **sliding 300 ms debounce** (reset on each new arrival, capped at **2 s** from the first) and then opens one pad with all the files.
 - **Focus:** a forwarded instance never received user input, so Windows' foreground lock would refuse the pad focus. Before forwarding, each secondary process calls **`AllowSetForegroundWindow(primary_pid)`** (a small custom hook around the single-instance plugin), so the click-mode pad can take focus for keyboard use and click-outside dismissal.
 - The entry is removed when the Explorer-entry setting is turned off, and on uninstall.
@@ -321,36 +341,48 @@ Nothing outside `platform` may call OS APIs directly.
 ### 6.11 IPC (typed, in `src/shared/ipc.ts` mirrored in Rust)
 - **Commands:**
   - `inspect(paths)`
-  - `start_jobs(preset_id, paths)`, `cancel_job(id)`, `retry_job(id)`, `list_jobs(page)`, `remove_job(id)`
+  - `start_jobs(preset_id, paths)`, `cancel_job(id)`, `retry_job(id, fallback)`, `list_jobs(page)`, `remove_job(id)`. `retry_job` with `fallback = true` re-runs into the fallback folder (§5.7)
   - `engines_list()`, `engine_install(id)`, `engine_remove(id)`, `engine_verify(id)`
   - `get_settings()`, `set_settings(patch)`
-  - `capture_backdrop()`
-  - `reveal(path)`, `open(path)`
+  - `reveal_job(id)`, `open_job(id)`, `reveal_notice(index)`, `notices()`
+  - Planned for Plan 2: `capture_backdrop()`
+  - There are deliberately no generic `reveal(path)` or `open(path)` commands, because the webview could pass them any path. `reveal_job` and `open_job` look up the history row and require status `done` and an existing output. `reveal_notice` shows a licence file by its index in `notices()`.
+  - Commands are `async` and run their blocking work off the main thread. Rust and TS mirror each other (`src/shared/ipc.ts`: `ipc.revealJob`, `ipc.openJob`, `ipc.revealNotice`).
 - **Events:** `job://*`, `engine://progress|done|failed`, `pad://open{paths, anchor}`.
 
 ### 6.12 Installer and uninstall
 - Tauri NSIS bundle, **per-user** install with no admin rights. **WebView2 install mode: `downloadBootstrapper`**, so the installer stays small and fetches WebView2 only on the rare Windows 10 machine without it.
-- `7za.exe` ships inside the app (§6.3).
+- `7z.exe` and `7z.dll` ship inside the app (§6.3).
 - **`installerHooks` → `NSIS_HOOK_POSTUNINSTALL`** removes everything Recast created outside its install folder: the HKCU `*\shell\Recast` verb, the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` start-with-Windows value, and `%LOCALAPPDATA%\Recast` (engines, history, logs). `%APPDATA%\Recast` (settings) is removed only if the user ticks "Delete app data". Recast's data paths are fixed to these `Recast` folders, not Tauri's identifier-named folders, so the hook and the app agree.
 
 ### 6.13 Repo layout
+This is the layout as built by Plan 1. The pad, handle, desk pad, triggers, shell and backdrop modules arrive with Plans 2 and 3.
 ```
 recast/
-  src/                 # React + TS
-    pad/               # PadApp, geometry.ts (rsector), hitTest.ts, glass/ (renderer), states.ts
-    companion/         # Activity, Tools, Library, Settings
-    handle/ deskpad/   # trigger windows
-    shared/            # ipc.ts, types.ts, icons/
+  index.html  package.json  vite.config.ts  tsconfig.json
+  src/                       # React + TS
+    main.tsx
+    companion/               # App, Activity, Library, Settings (+ companion.css, jobs.ts)
+    shared/                  # ipc.ts, types.ts, format.ts
   src-tauri/
-    src/  detect.rs presets.rs engines.rs jobs.rs history.rs settings.rs
-          triggers.rs shell.rs backdrop.rs ipc.rs  platform/{mod.rs,windows.rs}
+    src/
+      lib.rs  main.rs  app_state.rs  ipc.rs  tray.rs  logging.rs  paths.rs
+      detect.rs  pad_model.rs  history.rs  settings.rs  proc.rs
+      fsutil.rs  lockutil.rs  testutil.rs
+      presets/    mod.rs  available.rs  command.rs  naming.rs  catalog_tests.rs  snapshots/
+      engines/    mod.rs  manifest.rs  install.rs  caps.rs
+      jobs/       mod.rs  runner.rs  progress.rs  notify.rs  explain.rs  math.rs
+      platform/   mod.rs  win.rs
     presets/presets.toml
-    engines/engines.toml
-  src-tauri/windows/hooks.nsh  # NSIS_HOOK_POSTUNINSTALL (§6.12)
-  src-tauri/bin/7za.exe        # NSIS payload extractor for Ghostscript
-  scripts/refresh-engines   # re-pins engine URLs + sha256, runs capability checks
+    engines/engines.toml         # generated by scripts/refresh-engines.mjs
+    bin/7z.exe  7z.dll  7zip-License.txt
+    examples/fake_engine.rs      # test engine for the watchdog, kill and runner tests
+    tests/engines_integration.rs # real-engine tests (feature `engines`)
+    capabilities/default.json  tauri.conf.json
+  scripts/refresh-engines.mjs  fetch-7zip.mjs
   docs/
 ```
+Still to come: `src-tauri/windows/hooks.nsh` (`NSIS_HOOK_POSTUNINSTALL`, section 6.12), `docs/qa-checklist.md`, and the pad, handle and deskpad front ends. The Windows implementation is `platform/win.rs`, because a module named `windows` would shadow the `windows` crate.
 
 ---
 
@@ -379,11 +411,11 @@ Logs go to `%LOCALAPPDATA%\Recast\logs\recast.log` (rotating, 5 × 1 MB). Logs a
 
 ## 8. Security and privacy
 - **No network** except engine downloads from the pinned HTTPS URLs in the bundled manifest. No telemetry and no update pings in v1. Pandoc may fetch remote images that a converted document itself links to.
-- Engines are run by absolute path from Recast's own folder, with argv arrays. **There is never a shell**, so filenames can't inject commands.
+- Engines are run by absolute path from Recast's own folder, with argv arrays. **There is never a shell**, so filenames can't inject commands. ImageMagick runs under a restrictive `policy.xml` with resource limits (§6.3).
 - Downloaded binaries run only after SHA-256 verification.
 - The backdrop snapshot stays in memory and is discarded when the pad closes.
 - Everything is installed per user, with no admin rights needed. The installer is unsigned in v1; SmartScreen will warn (§11).
-- **Licensing:** Recast's own code is **MIT**. Recast invokes engines as separate programs and downloads them directly from upstream, so their GPL/AGPL terms don't extend to Recast. That holds only while Recast **doesn't re-host** them: if Recast ever mirrors an engine (for example a repackaged Ghostscript), it becomes a distributor and must carry the licence and a source offer. The only third-party binary Recast ships is `7za.exe` (LGPL), with its notice and a source link in Third-party notices.
+- **Licensing:** Recast's own code is **MIT**. Recast invokes engines as separate programs and downloads them directly from upstream, so their GPL/AGPL terms don't extend to Recast. That holds only while Recast **doesn't re-host** them: if Recast ever mirrors an engine (for example a repackaged Ghostscript), it becomes a distributor and must carry the licence and a source offer. The only third-party binaries Recast ships are 7-Zip's `7z.exe` and `7z.dll` (26.06; LGPL-2.1 + BSD-3 with the unRAR restriction), with the notice and a source link in Third-party notices. Release 26.06 is used because 23.01 has known CVEs.
 
 ---
 
@@ -394,7 +426,7 @@ Logs go to `%LOCALAPPDATA%\Recast\logs\recast.log` (rotating, 5 × 1 MB). Logs a
 | Rust unit | `presets::build_command` for every preset (snapshot tests of argv); `available()` rules for single, multiple and mixed files; output naming and collisions; ffmpeg progress parser; Ghostscript page parser; shake detector over recorded sample streams; settings defaults and migration; manifest validation | `cargo test`, no engines needed |
 | Rust watchdog / kill | a fake engine (test binary) that prints progress then hangs, ignores signals, or spawns a child; assert Stalled, the whole tree killed and the temp file gone | `cargo test` |
 | Rust integration | tiny fixtures (2 s video, 10-bit HEVC iPhone clip, video with no audio, short audio, PNG with alpha, animated GIF, HEIC, 3-page PDF, EPUB, MD with an image, TXT) through **every preset** with the real engines (downloaded once, cached in CI). Filenames include **Unicode** (`café 日本.mov`), a **path over 260 characters**, and **`%`, `[ ]` and a leading `-`**. Assert the output exists and has the right type (`ffprobe` / `magick identify` / `qpdf --check`), alpha is kept where expected, MP4 is 8-bit `yuv420p`, Shrink is ≤ the target, two concurrent Shrink jobs don't collide, and no temp dir is left behind | `cargo test --features engines` |
-| Engines | install from the manifest, a corrupted download is rejected, an interrupted install leaves nothing, Verify detects tampering, Ghostscript unpacks via `7za` without running its installer and `gswin64c` works from the unpacked folder, the `magick -list format` capability check | `cargo test --features engines` |
+| Engines | install from the manifest, a corrupted download is rejected, an interrupted install leaves nothing, Verify detects tampering, Ghostscript unpacks via 7-Zip without running its installer and `gswin64c` works from the unpacked folder, the `magick -list format` capability check | `cargo test --features engines` |
 | Front end | `rsector` geometry; hit-testing (point → segment, including gaps, More and Back); ring paging; light-adaptation threshold; state machine transitions (§4.3) | Vitest |
 | Manual checklist | real Explorer drags onto the edge handle, desk pad and shake; shake false positives (text selection, painting, a fullscreen game); "Open with Recast" with 1, 20 and 100 files, and the pad taking keyboard focus; the edge handle hiding over a fullscreen video; 100%/150%/200% DPI; two monitors; reduced motion and reduced transparency; keyboard-only pad; dark and light wallpapers; pad frame time on integrated graphics; uninstall leaves no verb, Run value or `%LOCALAPPDATA%\Recast`; first-run welcome; a drag from an elevated app is ignored without errors | `docs/qa-checklist.md`, run before each release |
 
