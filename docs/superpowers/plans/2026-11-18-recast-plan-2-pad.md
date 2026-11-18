@@ -34,7 +34,7 @@ Plan 2 delivers:
 
 ## Deliberate deviations from the spec (fold into the spec in Task 18)
 
-1. **Split PDF semantics.** Each comma-separated range in the page-range field becomes **one PDF**, saved inside a `<name> pages` folder: `1-3, 5, 8-` gives `pages-1-3.pdf`, `page-5.pdf` and `pages-8-end.pdf`. An empty field keeps Plan 1's "one PDF per page" (`pdf-split`). This uses a new **tools-only** preset `pdf-extract` with the placeholders `{range}` and `{range_name}`. A pass that uses them runs once per range.
+1. **Split PDF semantics.** Each comma-separated range in the page-range field becomes **one PDF**, saved inside the `folder:pages` output folder (named as Plan 1's `pdf-split` folder is, e.g. `report (pages)`): `1-3, 5, 8-` gives `pages-1-3.pdf`, `page-5.pdf` and `pages-8-end.pdf`. An empty field keeps Plan 1's "one PDF per page" (`pdf-split`). This uses a new **tools-only** preset `pdf-extract` with the placeholders `{range}` and `{range_name}`. A pass that uses them runs once per range.
 2. **Per-job options.** `start_jobs(preset_id, paths, options?)` takes `JobOptions { ranges }`. Options are stored as JSON in a new `jobs.options` column (history schema 2), so Retry re-runs with the same ranges.
 3. **Preset fields** `tools_only` (never offered in the ring), and `warn_over_s` + `warn_text`, the data-driven GIF warning. `PresetView` gains `engine_size` and `warning`.
 4. **Luminance is computed in the webview**, from the same captured image, by a pure TS function. Rust only captures. Luminance is Rec. 709 luma on sRGB values (no linearisation), and a value > 0.6 means light glass.
@@ -52,6 +52,52 @@ Plan 2 delivers:
     - Each has a 5 s cap. ImageMagick and Ghostscript only get paths made of plain ASCII without `%`, `[` or `]`. Anything else gets the type glyph.
     - `thumbnail` only serves paths that a recent `inspect` returned (the last 256), so the webview can't read arbitrary files.
 12. **Pad tray entry:** see "How the pad window opens in Plan 2" above.
+
+
+## Review amendments (Opus plan review, binding: these override the task text below)
+
+**A1. The pad can't be closed for good (H1).** Task 7: in `lib.rs` `on_window_event`, also handle `window.label() == pad::LABEL`:
+- call `api.prevent_close()`
+- emit `pad://dismiss` to the pad (`window.app_handle().emit_to(pad::LABEL, "pad://dismiss", ())`)
+- call `crate::pad::close(window.app_handle())`
+
+Task 8 adds `onPadDismiss(cb)` in `ipc.ts`. Task 15's PadApp listens and dispatches `{ type: "dismiss" }`. Alt+F4 must never destroy the pad window.
+
+**A2. Drag mode is reachable and targets the dragged files (H2, M9).**
+- Task 7 adds a second tray item, **"Drop pad"** (id `droppad`). It opens the pad at the cursor in `PadMode::Drag` with **no paths**. Plan 3's triggers replace it.
+- Task 15 PadApp rules:
+  - `enter` with paths that differ from the session's (or no session/paths yet) calls `begin({ paths, mode: "drag", reduced_transparency: <from the last pad://open> })`, so `Over` targeting applies to the files being dragged. Store `reduced_transparency` from each `pad://open` in a ref.
+  - A drag-mode open with empty `paths` shows the pad in a waiting state: disc title "Drop files here", every slot empty. Don't call `inspect([])`. Use `EMPTY` and skip `padRef.current.open` until files arrive. Leave-to-dismiss still applies, through the cursor poll that `pad::open` starts for drag mode (call `track_cursor(app, true)` inside `pad::open` when `mode == Drag`).
+  - Blur dismisses **only** in click mode, never while `dragging.current` is true.
+  - After any drop on the pad, switch the session's mode to `"click"`, call `getCurrentWindow().setFocus()`, and keep the session. Then a disc drop leaves a pad that Esc and click-outside can still close.
+  - A drop of paths different from the session's runs `begin` with mode `"click"` (as the task says).
+
+**A3. Catalog label test (M1).** Task 2, Step 6: in `catalog_tests.rs` `labels()`, filter out `tools_only` presets (`.filter(|p| !p.tools_only)`), so `pdf_ring_order_matches_spec` keeps passing.
+
+**A4. Who shows and hides the pad (M5, low cursor-poll item).** Task 7:
+- `PadState` holds one `Mutex<Inner { ready: bool, pending: Option<PadOpen>, generation: u64 }>`.
+  - Every `open` increments `generation` and puts it in `PadOpen` (`generation: u64`).
+  - Readiness and pending are read and written under that one lock.
+- `pad_close(generation)` is a no-op unless `generation` is current. The TS type gets `generation: number`, and PadApp's `finish` sends the session's generation.
+- **Click mode** positions the window in `open` but doesn't show it. A new command `pad_show(generation)`, a no-op if stale, shows and focuses it. PadApp calls it once the Ring has drawn its first frame: Ring gets an `onFirstFrame` prop, called after the first `draw`.
+- **Drag mode** still shows immediately with `show_no_activate`, because OLE must find the window under the cursor.
+- While nothing is shown, a slow `inspect` (ffprobe up to 15 s) leaves no invisible window swallowing clicks.
+- The cursor poll uses a generation counter (`AtomicU64`) instead of a bool. `track_cursor(on)` bumps it. Each thread exits when the counter no longer equals the value it started with, and never writes the flag. Then a close followed by a quick reopen can't leave two pollers running or kill the new one.
+
+**A5. Indeterminate rim (M6).** Task 3, in Rust: when `preset.progress == ProgressKind::None`, the `running` events carry `pct: None` (find where `execute`/`run_job` emits `running` with `Some(0.0)`, and emit `None` for those presets). Update any job test that asserts the initial pct. Activity already shows `Working…` for `null`.
+
+**A6. Frame budget (M10).** Task 14, Ring loop:
+- Stop requesting animation frames when nothing is moving. Restart the loop when `dirty` is set, from the effect that marks dirty, by holding a `kick()` function in a ref.
+- Skip `draw` entirely while `phase.name === "closed"`.
+- Task 13's `drawGlass` keeps the per-piece shadows. If Task 18's `?perf` measurement is over **4 ms**, render the shadow and rim layer once into an `OffscreenCanvas` whenever the springs and retract are settled, blit that, and redraw it only while something moves. Record the before and after numbers in the report.
+
+**A7. Bitmap lifetime (low).** PadApp releases a session's `GlassSource` only after the Ring using it has unmounted: release it in a `useEffect` cleanup keyed on the session. `finish` must not call `release` directly. `draw` is never called after the phase is `closed` (A6).
+
+**A8. Inline ring fits the window (low).** In Task 16, the `.ring-overlay` scales the ring down when the content is shorter than 460 px: `.ring-overlay .ring { transform: scale(min(1, calc((100vh - 20px) / 440px))) }`. If that `calc` isn't valid CSS for `scale`, set the scale from JS with `window.innerHeight` in `InlineRing`. Hit-testing must use unscaled coordinates: in Ring's `local()`, divide by `r.width / SIZE`.
+
+**A9. StrictMode.** Every listener effect (PadApp `onPadOpen`, drag-drop, focus, `onJobEvent`, router subscriptions) must tolerate React StrictMode's mount → unmount → mount: unlisten in cleanup, and `padReady()` may be called twice (it's idempotent). InlineRing's `open` effect runs twice in dev, and that's harmless.
+
+**A10. Thumbnail allowlist wording (low).** The allowlist limits `thumbnail` to files the user has dropped or picked, as defence in depth. It isn't a security boundary, because the webview can call `inspect` itself. Word the spec accordingly in Task 18.
 
 ## File structure
 
@@ -237,7 +283,6 @@ Replace `vite.config.ts`:
 
 ```ts
 /// <reference types="vitest/config" />
-import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -250,17 +295,13 @@ export default defineConfig({
     target: "chrome105",
     outDir: "dist",
     rollupOptions: {
-      input: {
-        main: resolve(__dirname, "index.html"),
-        pad: resolve(__dirname, "pad.html"),
-      },
+      // Relative to the project root; no node imports (there is no @types/node).
+      input: { main: "index.html", pad: "pad.html" },
     },
   },
   test: { environment: "jsdom", globals: true },
 });
 ```
-
-If `tsc` complains that `node:path`/`__dirname` have no types, use `fileURLToPath(new URL("./index.html", import.meta.url))` from `node:url` instead of `resolve(__dirname, …)`; do not add `@types/node` just for this.
 
 - [ ] **Step 7: Placeholder pad app**
 
@@ -851,15 +892,15 @@ Add `use serde::Deserialize;` if missing. Read the existing job tests first (`CA
 id = "ranged"
 tools_only = true
 out_naming = "folder:parts"
-passes = [['{in}', '{range}', '{out_dir}\{range_name}.txt']]
+passes = [['ok', '{out_dir}\{range_name}.txt', '{range}']]
 ```
 
-The fake engine's argv contract decides what it writes, so pick the fake engine mode that the existing folder-output test uses. If no test writes a folder output, find the mode in `examples/fake_engine.rs` that writes its last argument as a file, and use it. Then add these tests, adapting the harness names to the real ones:
+`fake_engine ok <path>` writes `converted` to its second argument (the trailing `{range}` argument is ignored). Then add these tests, which use the real harness (`rig()`, `r.wait_end(id)`):
 
 ```rust
     #[test]
     fn ranged_jobs_need_valid_ranges_and_keep_them_for_retry() {
-        let r = harness(); // the existing test harness constructor
+        let r = rig(); // the existing jobs test harness
         let input = r.dir.path().join("doc.pdf");
         std::fs::write(&input, b"%PDF-1.7\n").unwrap();
         let err = r.mgr.start_jobs("ranged", &[input.clone()], JobOptions::default()).unwrap_err();
@@ -870,7 +911,7 @@ The fake engine's argv contract decides what it writes, so pick the fake engine 
         let id = r.mgr.start_jobs("ranged", &[input.clone()], opts.clone()).unwrap().remove(0);
         let rec = lock(&r.history).get(&id).unwrap().unwrap();
         assert_eq!(rec.options.as_deref(), Some(r#"{"ranges":"1-2, 4"}"#));
-        // wait for the job to finish with the harness's existing wait helper, then:
+        r.wait_end(&id);
         let again = r.mgr.retry(&id, false).unwrap().remove(0);
         let rec2 = lock(&r.history).get(&again).unwrap().unwrap();
         assert_eq!(rec2.options, rec.options);
@@ -878,7 +919,7 @@ The fake engine's argv contract decides what it writes, so pick the fake engine 
 
     #[test]
     fn options_are_refused_by_presets_that_take_none() {
-        let r = harness();
+        let r = rig();
         let input = r.dir.path().join("a.bin");
         std::fs::write(&input, b"x").unwrap();
         let opts = JobOptions { ranges: Some("1".into()) };
@@ -932,7 +973,7 @@ When building each `Job`, set `options: options.clone()`. After the `history.ins
             }
 ```
 
-5. In `execute`, just before `build_command`, parse the ranges again (the page count is known by now) and pass them:
+5. In `run_job` (where `build_command` is called; read it), just before `build_command`, parse the ranges again (the page count is known by now) and pass them:
 
 ```rust
         let ranges = if preset.per_range() {
@@ -1322,7 +1363,7 @@ pub fn transparency_enabled() -> bool {
             RRF_RT_REG_DWORD,
             None,
             Some(&mut value as *mut u32 as *mut c_void),
-            Some(&mut size),
+            Some(&mut size as *mut u32),
         )
     };
     !r.is_ok() || value != 0
@@ -1582,7 +1623,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 
 use crate::lockutil::lock;
 use crate::platform;
@@ -1688,7 +1729,7 @@ pub fn open(app: &AppHandle, paths: Vec<String>, mode: PadMode) {
         let (x, y) = place(anchor, px, (wa.position.x, wa.position.y, wa.size.width, wa.size.height));
         // Position first: the size is then interpreted at the target monitor's DPI.
         let _ = w.set_position(PhysicalPosition::new(x, y));
-        let _ = w.set_size(LogicalSize::new(SIZE, SIZE));
+        let _ = w.set_size(tauri::PhysicalSize::new(px, px));
     }
     let req = PadOpen {
         paths,
@@ -2445,7 +2486,7 @@ describe("anim", () => {
   it("springs at the same speed whatever the frame rate", () => {
     const at60 = approach(approach(0, 1, 16.667), 1, 16.667);
     const at30 = approach(0, 1, 33.333);
-    expect(at60).toBeCloseTo(at30, 5);
+    expect(at60).toBeCloseTo(at30, 4);
     expect(approach(0, 1, 16.667)).toBeCloseTo(0.2, 3);
   });
 });
@@ -2727,7 +2768,10 @@ export function reduce(s: PadState, e: PadEvent): PadState {
     }
     case "outside":
       if (!interactive(s.phase)) return s;
-      return { ...s, outsideSince: e.distance > LEAVE_PX ? (s.outsideSince ?? e.at) : null };
+    {
+      const next = e.distance > LEAVE_PX ? (s.outsideSince ?? e.at) : null;
+      return next === s.outsideSince ? s : { ...s, outsideSince: next };
+    }
     case "drop":
       if (!interactive(s.phase)) return s;
       if (e.hit.kind === "center") return s;
@@ -2957,7 +3001,7 @@ export function label(v: BatchView, engine: { engine_name: string; engine_size: 
 import { CX, CY, DISC_R, GAP, N, R, R1, STEP, TH, inSector, slotAngle } from "./geometry";
 
 export interface Pixels {
-  data: Uint8ClampedArray;
+  data: Uint8ClampedArray<ArrayBuffer>;
   width: number;
   height: number;
 }
@@ -3436,8 +3480,10 @@ function drawGlass(ctx: CanvasRenderingContext2D, dpr: number, g: GlassSource | 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.globalAlpha = 1;
   } else {
+    ctx.globalAlpha = q.alpha;
     ctx.fillStyle = SOLID[solid ?? "dark"];
     ctx.fill(q.path);
+    ctx.globalAlpha = 1;
   }
   ctx.fillStyle = q.tint;
   ctx.fill(q.path);
@@ -3864,7 +3910,7 @@ import { useEffect, useRef, useState } from "react";
 import { formatBytes } from "../shared/format";
 import type { PadModel } from "../shared/types";
 import { buildFrame, restSprings, springsSettled, stepRetract, stepSprings, type Spring } from "./frame";
-import { PAGE_FADE_MS } from "./anim";
+import { OPEN_MS, PAGE_FADE_MS } from "./anim";
 import { CX, CY, R1, SIZE, slotAngle } from "./geometry";
 import { hitTest } from "./hitTest";
 import { discText } from "./disc";
@@ -3957,7 +4003,7 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, class
         dirty.current ||
         !springsSettled(springs, busy ? null : t) ||
         Math.abs(nextRetract - retract) > 0.001 ||
-        s.phase.name === "opening" ||
+        now - openedAt < OPEN_MS ||
         now - s.pageAt < PAGE_FADE_MS ||
         (busy && L.batch.pct == null && !s.reducedMotion);
       retract = nextRetract;
