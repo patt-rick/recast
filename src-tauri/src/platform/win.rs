@@ -145,7 +145,7 @@ pub fn is_transient_lock(e: &io::Error) -> bool {
 /// Diagnostics for tests: is a process with this pid still running?
 pub fn is_process_alive(pid: u32) -> bool {
     unsafe {
-        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false.into(), pid) {
+        match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
             Ok(h) => {
                 let mut code = 0u32;
                 let ok = GetExitCodeProcess(h, &mut code).is_ok();

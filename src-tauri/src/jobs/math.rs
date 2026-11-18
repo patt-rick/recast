@@ -22,11 +22,10 @@ pub fn estimate_bytes(preset: &Preset, inputs_size: u64, duration_s: Option<f64>
     if preset.uses("video_kbps") {
         return target_mb as u64 * MB;
     }
-    if matches!(preset.out_ext.as_str(), "wav" | "aiff") {
-        if let Some(d) = duration_s {
+    if matches!(preset.out_ext.as_str(), "wav" | "aiff")
+        && let Some(d) = duration_s {
             return (d * 176_400.0) as u64;
         }
-    }
     if preset.engine == "ghostscript" && preset.out_naming.is_folder() {
         return pages.map(|p| p as u64 * MB).unwrap_or(inputs_size.saturating_mul(10));
     }

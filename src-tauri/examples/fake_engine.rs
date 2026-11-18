@@ -41,6 +41,7 @@ fn main() {
         "hang" => hang(),
         // starts a grandchild that hangs, reports its pid, then hangs itself
         "spawn_child" => {
+            #[allow(clippy::zombie_processes)] // deliberate: the test needs an orphan grandchild
             let child = Command::new(std::env::current_exe().unwrap()).arg("hang").spawn().unwrap();
             println!("child={}", child.id());
             out.lock().flush().unwrap();

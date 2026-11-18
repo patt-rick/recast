@@ -193,11 +193,10 @@ pub fn detect(path: &Path, probe: &dyn Fn(&Path) -> Option<Probe>) -> std::io::R
     let n = std::fs::File::open(path)?.read(&mut head)?;
     let (kind, format) = classify(path, &head[..n]);
     let mut info = FileInfo::bare(path, kind, format, meta.len());
-    if matches!(kind, Kind::Video | Kind::Audio) {
-        if let Some(p) = probe(path) {
+    if matches!(kind, Kind::Video | Kind::Audio)
+        && let Some(p) = probe(path) {
             refine(&mut info, &p);
         }
-    }
     Ok(info)
 }
 

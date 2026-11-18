@@ -54,15 +54,14 @@ impl Tracker {
         }
         let mut f = Feed { consumed: true, ..Default::default() };
         if k == "out_time_us" {
-            if let Ok(us) = v.trim().parse::<i64>() {
-                if us > self.last_us {
+            if let Ok(us) = v.trim().parse::<i64>()
+                && us > self.last_us {
                     self.last_us = us;
                     f.advanced = true;
                     if let Some(d) = self.duration_s.filter(|d| *d > 0.0) {
                         f.pct = Some(((us as f64 / 1e6) / d).clamp(0.0, 1.0) as f32);
                     }
                 }
-            }
         } else if k == "progress" && v.trim() == "end" {
             f.advanced = true;
             f.pct = Some(1.0);

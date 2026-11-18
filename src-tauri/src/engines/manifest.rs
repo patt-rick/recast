@@ -76,11 +76,10 @@ impl Manifest {
             if e.bins.is_empty() {
                 errs.push(format!("{id}: bins is empty"));
             }
-            if let Some(b) = e.check.first() {
-                if !e.bins.contains_key(b) {
+            if let Some(b) = e.check.first()
+                && !e.bins.contains_key(b) {
                     errs.push(format!("{id}: check uses unknown bin '{b}'"));
                 }
-            }
         }
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }

@@ -463,11 +463,10 @@ impl Inner {
 
         // 6. Disk space (DISK_FULL)
         let need = math::required_free(math::estimate_bytes(preset, total_size, duration, pages, settings.shrink.target_mb));
-        if let Some(free) = platform::free_space(&dest) {
-            if free < need {
+        if let Some(free) = platform::free_space(&dest)
+            && free < need {
                 return Err(Failure::new(DiskFull, format!("Not enough disk space: about {} MB is needed.", need / MB + 1)));
             }
-        }
 
         // 7. Hidden temp dir on the destination volume
         let tmp = tmp_dir_for(&dest, &job.id, &self.scratch)?;

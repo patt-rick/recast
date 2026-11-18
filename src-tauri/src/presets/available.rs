@@ -53,8 +53,8 @@ fn applies(p: &Preset, files: &[FileFacts], caps: &Caps) -> bool {
     if p.requires.iter().any(|r| r == "audio_stream") && files.iter().any(|f| f.has_audio == Some(false)) {
         return false;
     }
-    if p.engine == "imagemagick" {
-        if let Some(c) = caps.magick {
+    if p.engine == "imagemagick"
+        && let Some(c) = caps.magick {
             for f in files {
                 let out = p.out_format_for(&f.format);
                 let read = format!("magick:read:{}", magick_name(&f.format));
@@ -64,7 +64,6 @@ fn applies(p: &Preset, files: &[FileFacts], caps: &Caps) -> bool {
                 }
             }
         }
-    }
     true
 }
 
