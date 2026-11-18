@@ -1,0 +1,186 @@
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  .card-image{aspect-ratio:auto !important;display:block !important;background:none !important}
+  .cards.two{display:grid !important;grid-template-columns:repeat(2,minmax(0,1fr)) !important}
+  @media (max-width:860px){.cards.two{grid-template-columns:1fr !important}}
+  .wall{position:relative;width:100%;min-width:340px;height:460px;overflow:hidden;font-family:-apple-system,"SF Pro Text",Inter,"Segoe UI Variable",system-ui,sans-serif;user-select:none}
+  .bg{position:absolute;inset:0;
+    background:
+      radial-gradient(55% 50% at 15% 20%, #ffb07c 0, rgba(255,176,124,0) 70%),
+      radial-gradient(50% 55% at 88% 15%, #5b8def 0, rgba(91,141,239,0) 70%),
+      radial-gradient(65% 55% at 75% 100%, #b06ad9 0, rgba(176,106,217,0) 70%),
+      radial-gradient(45% 45% at 5% 100%, #1f4fa8 0, rgba(31,79,168,0) 70%),
+      linear-gradient(160deg,#d98a74,#4a3f86 55%,#1b1f4a)}
+  .bg .win{position:absolute;left:-30px;bottom:30px;width:240px;height:170px;border-radius:12px;background:rgba(250,250,252,.94);box-shadow:0 20px 50px rgba(0,0,0,.35)}
+  .bg .win .bar{height:26px;border-bottom:1px solid #e6e6ea;display:flex;align-items:center;padding-left:40px;font:600 11px Inter,sans-serif;color:#333}
+  .bg .win .ln{height:7px;border-radius:4px;background:#d7d9df;margin:10px 14px 0 40px}
+  .bg .win .ln.b{background:#7aa7f7;width:90px}
+  .bg .fi{position:absolute;width:62px;text-align:center;color:#fff;font:500 10.5px Inter,sans-serif;text-shadow:0 1px 2px rgba(0,0,0,.5)}
+  .bg .fi div{width:46px;height:38px;margin:0 auto 4px;border-radius:5px;background:linear-gradient(#7cc4ff,#3b8fe8);box-shadow:0 2px 4px rgba(0,0,0,.25)}
+  .bg .fi.doc div{width:34px;height:44px;background:#fff;border-radius:3px}
+  .bg .fi.img div{width:46px;height:34px;background:linear-gradient(135deg,#40c9a2,#f7c548)}
+  .lensclip{position:absolute;inset:0;pointer-events:none;will-change:clip-path}
+  .lensclip .bg{will-change:transform}
+  .ov{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+  .sym{position:absolute;left:0;top:0;display:flex;flex-direction:column;align-items:center;justify-content:center;width:70px;height:70px;pointer-events:none;color:#fff;will-change:transform}
+  .sym svg{width:23px;height:23px;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.25))}
+  .sym span{margin-top:5px;font-size:11px;font-weight:600;letter-spacing:.1px;text-shadow:0 1px 2px rgba(0,0,0,.3)}
+  .center{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;pointer-events:none;color:#fff;text-align:center}
+  .thumb{width:88px;height:58px;border-radius:10px;overflow:hidden;box-shadow:0 8px 20px rgba(0,0,0,.3),0 0 0 .5px rgba(255,255,255,.6)}
+  .fname{margin-top:8px;font-size:12px;font-weight:600;text-shadow:0 1px 2px rgba(0,0,0,.35)}
+  .fmeta{margin-top:2px;font-size:10.5px;opacity:.8}
+  .pill{position:absolute;transform:translate(-50%,-50%);padding:6px 12px;border-radius:999px;font:600 12px -apple-system,Inter,sans-serif;color:#fff;white-space:nowrap;
+    background:rgba(30,30,36,.5);backdrop-filter:blur(14px) saturate(180%);-webkit-backdrop-filter:blur(14px) saturate(180%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 0 0 .5px rgba(255,255,255,.2),0 8px 20px rgba(0,0,0,.25);opacity:0;transition:opacity .15s;pointer-events:none}
+  .dim{position:absolute;inset:0;background:rgba(0,0,0,.32);pointer-events:none;opacity:0;transition:opacity .35s}
+  .replay{color:#2563eb;cursor:pointer;text-decoration:underline;font-size:12px}
+</style>
+
+<h2>Segmented, in Apple's Liquid Glass language</h2>
+<p class="subtitle">Built from Apple's own description of Liquid Glass: the glass <b>bends light</b> (it magnifies what's behind it rather than just frosting it), has <b>specular rims</b>, <b>lifts and lights up from within</b> under your pointer, <b>materializes</b> instead of fading in, keeps every shape <b>concentric</b>, and reserves <b>tint</b> for the one target you're on. Hover slowly; use "replay" to see it open.</p>
+
+<div class="cards two">
+  <div class="card" data-choice="regular" onclick="toggleSelect(this)">
+    <div class="card-image"><div class="wall" id="s1"></div></div>
+    <div class="card-body"><h3>1. Regular glass</h3><p>Six capsule segments sharing one centre. The target lifts outward, lights up where your pointer is, and takes the system-blue tint. <span class="replay" data-r="s1">replay open</span></p></div>
+  </div>
+  <div class="card" data-choice="lens" onclick="toggleSelect(this)">
+    <div class="card-image"><div class="wall" id="s2"></div></div>
+    <div class="card-body"><h3>2. Ring + lens</h3><p>One continuous glass ring; a thicker glass <b>lens</b> rides along it, snaps to the nearest tool and magnifies it (like the iOS 26 tab-bar drag). <span class="replay" data-r="s2">replay open</span></p></div>
+  </div>
+  <div class="card" data-choice="clear" onclick="toggleSelect(this)">
+    <div class="card-image"><div class="wall" id="s3"></div></div>
+    <div class="card-body"><h3>3. Clear glass</h3><p>Apple's "clear" variant: the desktop dims while the pad is open, the segments are nearly invisible glass, and bold white symbols carry it. Most dramatic. <span class="replay" data-r="s3">replay open</span></p></div>
+  </div>
+  <div class="card" data-choice="regular-dark" onclick="toggleSelect(this)">
+    <div class="card-image"><div class="wall" id="s4"></div></div>
+    <div class="card-body"><h3>4. Regular, adapting</h3><p>Same as 1 over a light window: per Apple, the glass and its symbols <b>flip dark</b> for contrast when what's behind them is bright. This is the same pad, shown adapting. <span class="replay" data-r="s4">replay open</span></p></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const ICON={
+    music:'<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
+    film:'<rect x="3" y="3" width="18" height="18" rx="3"/><path d="M7.5 3v18M16.5 3v18M3 12h18M3 7.5h4.5M3 16.5h4.5M16.5 7.5H21M16.5 16.5H21"/>',
+    spark:'<path d="M12 3.5l1.7 5.1 5.1 1.7-5.1 1.7L12 17.1l-1.7-5.1-5.1-1.7 5.1-1.7z"/><path d="M19 15.5l.6 1.9 1.9.6-1.9.6-.6 1.9-.6-1.9-1.9-.6 1.9-.6z"/>',
+    globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.7 5.6 3.7 9s-1.2 6.4-3.7 9c-2.5-2.6-3.7-5.6-3.7-9S9.5 5.6 12 3z"/>',
+    shrink:'<path d="M4 14h6v6M20 10h-6V4M14 10l6.5-6.5M3.5 20.5L10 14"/>',
+    phones:'<path d="M3.5 17v-5a8.5 8.5 0 0 1 17 0v5"/><rect x="2.8" y="13.5" width="4.4" height="7" rx="1.6"/><rect x="16.8" y="13.5" width="4.4" height="7" rx="1.6"/>'
+  };
+  const T=[["MP3","music","Audio only · MP3"],["MP4","film","Video · MP4, smaller"],["GIF","spark","Animated GIF"],
+           ["WebM","globe","Web video · WebM"],["Shrink","shrink","Compress to 25 MB"],["M4A","phones","Audio only · M4A"]];
+  const N=T.length,NS="http://www.w3.org/2000/svg",STEP=2*Math.PI/N,BLUE="10,132,255";
+  const ang=i=>-Math.PI/2+i*STEP, lerp=(a,b,t)=>a+(b-a)*t;
+  const thumb='<div class="thumb"><svg viewBox="0 0 88 58" width="88" height="58" style="display:block"><defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffd3a1"/><stop offset=".55" stop-color="#f08c6a"/><stop offset="1" stop-color="#7b4a7a"/></linearGradient></defs><rect width="88" height="58" fill="url(#sky)"/><circle cx="60" cy="28" r="8.5" fill="#fff4d6" opacity=".9"/><path d="M0 42 L17 29 L29 37 L44 21 L61 39 L73 31 L88 41 V58 H0Z" fill="#3b2d55"/><path d="M0 48 L21 39 L38 46 L57 37 L88 48 V58 H0Z" fill="#251c3a"/></svg></div>';
+  const BGHTML='<div class="win"><div class="bar">Project notes</div><div class="ln b"></div><div class="ln"></div><div class="ln" style="width:120px"></div><div class="ln"></div><div class="ln" style="width:80px"></div></div>'+
+    '<div class="fi" style="right:14px;top:16px"><div></div>Clips</div><div class="fi doc" style="right:14px;top:92px"><div></div>Notes.md</div><div class="fi img" style="right:14px;top:170px"><div></div>Cover.png</div>';
+  const BGHTML_LIGHT='<div style="position:absolute;inset:26px 18px;border-radius:14px;background:#f5f5f7;box-shadow:0 20px 50px rgba(0,0,0,.3)"><div style="height:30px;border-bottom:1px solid #e3e3e8;font:600 11px Inter,sans-serif;color:#333;display:flex;align-items:center;padding-left:14px">Downloads</div>'+
+    Array.from({length:12},(_,k)=>'<div style="height:22px;margin:0 14px;border-bottom:1px solid #ececf0;display:flex;align-items:center;gap:8px;font:400 10.5px Inter,sans-serif;color:#555"><span style="width:12px;height:12px;border-radius:3px;background:'+["#7cc4ff","#f7c548","#40c9a2","#f28b82"][k%4]+'"></span>'+["holiday.mov","invoice-0412.pdf","cover-final.png","podcast-ep12.wav","notes.md","scan_01.heic"][k%6]+'</div>').join("")+'</div>';
+
+  // capsule-ended annular sector (concentric, Apple-style rounded ends)
+  function capsule(cx,cy,R,TH,a0,a1){const h=TH/2,ro=R+h,ri=R-h,P=(r,a)=>(cx+r*Math.cos(a)).toFixed(2)+" "+(cy+r*Math.sin(a)).toFixed(2);const lg=(a1-a0)>Math.PI?1:0;
+    return "M"+P(ro,a0)+" A"+ro+" "+ro+" 0 "+lg+" 1 "+P(ro,a1)+" A"+h+" "+h+" 0 0 1 "+P(ri,a1)+" A"+ri+" "+ri+" 0 "+lg+" 0 "+P(ri,a0)+" A"+h+" "+h+" 0 0 1 "+P(ro,a0)+" Z"}
+  function rsector(cx,cy,R,th,ca,hs,gap,rc){const ro=R+th/2,ri=R-th/2;const ao=Math.asin(gap/2/ro),ai=Math.asin(gap/2/ri);
+    const a0o=ca-hs+ao,a1o=ca+hs-ao,a0i=ca-hs+ai,a1i=ca+hs-ai;const P=(r,a)=>(cx+r*Math.cos(a)).toFixed(2)+" "+(cy+r*Math.sin(a)).toFixed(2);
+    const L=(a,b,t)=>a+(b-a)*t;const lgo=(a1o-a0o)>Math.PI?1:0;const dao=rc/ro,dai=rc/ri;
+    const e1=(r)=>L(a1i,a1o,(r-ri)/(ro-ri)),e0=(r)=>L(a0i,a0o,(r-ri)/(ro-ri));
+    return "M"+P(ro,a0o+dao)+" A"+ro+" "+ro+" 0 "+lgo+" 1 "+P(ro,a1o-dao)+" Q"+P(ro,a1o)+" "+P(ro-rc,e1(ro-rc))+" L"+P(ri+rc,e1(ri+rc))+" Q"+P(ri,a1i)+" "+P(ri,a1i-dai)+
+      " A"+ri+" "+ri+" 0 "+lgo+" 0 "+P(ri,a0i+dai)+" Q"+P(ri,a0i)+" "+P(ri+rc,e0(ri+rc))+" L"+P(ro-rc,e0(ro-rc))+" Q"+P(ro,a0o)+" "+P(ro,a0o+dao)+" Z"}
+  function overLight(S,x,y){const w=S.bg.querySelector(".win");if(!w)return false;const l=w.offsetLeft,t=w.offsetTop;return x>l-6&&x<l+w.offsetWidth+6&&y>t-6&&y<t+w.offsetHeight+6}
+  function annulus(cx,cy,r0,r1){const c=(r)=>"M"+(cx-r)+" "+cy+" a"+r+" "+r+" 0 1 0 "+(2*r)+" 0 a"+r+" "+r+" 0 1 0 "+(-2*r)+" 0Z";return c(r1)+" "+c(r0)}
+  function circ(cx,cy,r){return "M"+(cx-r)+" "+cy+" a"+r+" "+r+" 0 1 0 "+(2*r)+" 0 a"+r+" "+r+" 0 1 0 "+(-2*r)+" 0Z"}
+
+  function setup(id,light){
+    const w=document.getElementById(id);const W=w.clientWidth,H=460;
+    const bg=document.createElement("div");bg.className="bg";bg.innerHTML=light?BGHTML_LIGHT:BGHTML;w.appendChild(bg);
+    const dim=document.createElement("div");dim.className="dim";w.appendChild(dim);
+    const ov=document.createElementNS(NS,"svg");ov.setAttribute("class","ov");ov.setAttribute("width",W);ov.setAttribute("height",H);
+    ov.innerHTML='<defs><linearGradient id="'+id+'rim" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="'+W+'" y2="'+H+'"><stop offset="0" stop-color="#fff" stop-opacity=".95"/><stop offset=".42" stop-color="#fff" stop-opacity=".25"/><stop offset=".58" stop-color="#fff" stop-opacity=".12"/><stop offset="1" stop-color="#fff" stop-opacity=".6"/></linearGradient>'+
+      '<radialGradient id="'+id+'glow" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="80"><stop offset="0" stop-color="#fff" stop-opacity=".45"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>'+
+      '<filter id="'+id+'soft" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="2.2"/></filter></defs>';
+    w.appendChild(ov);
+    const S={w,W,H,cx:W/2,cy:H/2,bg,dim,ov,mx:-999,my:-999,id};
+    w.addEventListener("mousemove",e=>{const r=w.getBoundingClientRect();S.mx=e.clientX-r.left;S.my=e.clientY-r.top});
+    w.addEventListener("mouseleave",()=>{S.mx=-999;S.my=-999});
+    return S}
+  // one piece of glass: a clipped, magnified, blurred copy of what's behind + rim + glow + tint
+  function glass(S,opt){
+    const wrap=document.createElement("div");wrap.className="lensclip";wrap.style.filter="drop-shadow(0 8px 16px rgba(0,0,0,.16)) drop-shadow(0 1px 2px rgba(0,0,0,.12))";const clip=document.createElement("div");clip.className="lensclip";const copy=S.bg.cloneNode(true);clip.appendChild(copy);wrap.appendChild(clip);S.w.insertBefore(wrap,S.ov);
+    const g=document.createElementNS(NS,"g");const mk=(attrs)=>{const p=document.createElementNS(NS,"path");for(const k in attrs)p.setAttribute(k,attrs[k]);g.appendChild(p);return p};
+    const cp=document.createElementNS(NS,"clipPath");cp.id=S.id+"c"+Math.random().toString(36).slice(2,7);const cpp=document.createElementNS(NS,"path");cp.appendChild(cpp);S.ov.querySelector("defs").appendChild(cp);
+    const tint=mk({fill:"rgba(255,255,255,0)"}),glow=mk({fill:"url(#"+S.id+"glow)",opacity:0}),
+      inner=mk({fill:"none",stroke:"#fff","stroke-opacity":".35","stroke-width":"7","clip-path":"url(#"+cp.id+")",filter:"url(#"+S.id+"soft)"}),
+      rim=mk({fill:"none",stroke:"url(#"+S.id+"rim)","stroke-width":"1.2"});
+    S.ov.appendChild(g);
+    return{update(d,ox,oy,mag,blur,o){clip.style.clipPath="path(evenodd,'"+d+"')";copy.style.transformOrigin=ox+"px "+oy+"px";
+        copy.style.transform="scale("+mag.toFixed(4)+")";copy.style.filter="blur("+blur.toFixed(2)+"px) saturate("+(o.sat||1.6)+") brightness("+(o.bri||1.08)+")";
+        [tint,glow,inner,rim,cpp].forEach(p=>p.setAttribute("d",d));tint.setAttribute("fill",o.tint||"rgba(255,255,255,.06)");glow.setAttribute("opacity",(o.glow||0).toFixed(3));
+        rim.setAttribute("stroke-width",o.rimW||1.2);rim.setAttribute("opacity",(o.rimO==null?1:o.rimO).toFixed(3));inner.setAttribute("stroke-opacity",(o.innerO==null?.35:o.innerO).toFixed(3));
+        if(o.dark){rim.setAttribute("opacity",(o.rimO==null?.7:o.rimO).toFixed(3))}}}}
+  function syms(S,dark){return T.map((t,i)=>{const e=document.createElement("div");e.className="sym";e.innerHTML='<svg viewBox="0 0 24 24">'+ICON[t[1]]+'</svg><span>'+t[0]+'</span>';if(dark)e.style.color="#1d1d1f";S.w.appendChild(e);return e})}
+  function centerDisc(S,r,dark){const g=glass(S);const d=circ(S.cx,S.cy,r);
+    const c=document.createElement("div");c.className="center";c.innerHTML=thumb+'<div class="fname">holiday.mov</div><div class="fmeta">MOV · 1.2 GB · 2:14</div>';
+    if(dark){c.style.color="#1d1d1f";c.querySelectorAll(".fname,.fmeta").forEach(x=>x.style.textShadow="none")}
+    c.style.left=S.cx+"px";c.style.top=S.cy+"px";S.w.appendChild(c);return(m)=>g.update(d,S.cx,S.cy,lerp(1,1.06,m),lerp(0,3,m),{rimO:m,innerO:.3*m,tint:dark?"rgba(255,255,255,"+(.35*m).toFixed(3)+")":undefined})}
+  function pillEl(S){const p=document.createElement("div");p.className="pill";S.w.appendChild(p);return p}
+  function opener(S,n){const st={t0:performance.now()};document.querySelector('.replay[data-r="'+S.id+'"]').addEventListener("click",e=>{e.stopPropagation();st.t0=performance.now()});
+    return(i)=>{const t=(performance.now()-st.t0-120-i*55)/520;const x=Math.max(0,Math.min(1,t));return 1-Math.pow(1-x,3)}}
+  function nearest(S,R,r0,r1){const dx=S.mx-S.cx,dy=S.my-S.cy,rad=Math.hypot(dx,dy);if(rad<r0-8||rad>r1+34)return{i:-1};const a=Math.atan2(dy,dx);let b=-1,bd=9;
+    for(let i=0;i<N;i++){const d=Math.abs(Math.atan2(Math.sin(a-ang(i)),Math.cos(a-ang(i))));if(d<bd){bd=d;b=i}}return{i:b,a}}
+
+  // 1 & 4: regular segmented
+  function regular(id,light){const S=setup(id,light),R=136,TH=68,GAP=9,r0=R-TH/2,r1=R+TH/2;
+    const disc=centerDisc(S,r0-14,light);const segs=T.map(()=>glass(S));const sy=syms(S,light);const pill=pillEl(S);const op=opener(S);
+    const st=T.map(()=>({h:0,off:0}));let glowX=0,glowY=0;
+    (function tick(){const nb=nearest(S,R,r0,r1);glowX=S.mx;glowY=S.my;S.ov.querySelector("#"+id+"glow").setAttribute("cx",glowX);S.ov.querySelector("#"+id+"glow").setAttribute("cy",glowY);
+      disc(op(0));
+      segs.forEach((g,i)=>{const m=op(i+1),o=st[i],on=nb.i===i;o.h=lerp(o.h,on?1:0,.2);o.off=lerp(o.off,on?9:0,.2);
+        const ca=ang(i),hs=(STEP/2)*(1+.04*o.h)*lerp(.55,1,m),th=TH*(1+.08*o.h)*lerp(.8,1,m);
+        const cx=S.cx+o.off*Math.cos(ca),cy=S.cy+o.off*Math.sin(ca);const d=rsector(cx,cy,R,th,ca,hs,GAP,17);
+        const sx=cx+R*Math.cos(ca),sy2=cy+R*Math.sin(ca);
+        const lit=light||overLight(S,sx,sy2);
+        g.update(d,sx,sy2,lerp(1,1.10+.05*o.h,m),lerp(0,lit?6:5,m),{rimO:m,innerO:(lit?.6:(.32+.2*o.h))*m,glow:o.h*(lit?.3:.9),bri:lit?1.0:1.08,sat:lit?1.2:1.6,
+          tint:o.h>.02?"rgba("+BLUE+","+((lit?.8:.45)*o.h).toFixed(3)+")":(lit?"rgba(255,255,255,"+(.12*m).toFixed(3)+")":"rgba(255,255,255,"+(.06*m).toFixed(3)+")"),dark:lit});
+        const e=sy[i];e.style.opacity=m;e.style.transform="translate("+(sx-35)+"px,"+(sy2-35)+"px) scale("+(1+.1*o.h).toFixed(3)+")";
+        const darkSym=lit&&o.h<.5;e.style.color=darkSym?"#1d1d1f":"#fff";e.querySelectorAll("svg,span").forEach(x=>{x.style.filter=darkSym?"none":"";x.style.textShadow=darkSym?"none":""})});
+      if(nb.i>=0){const ca=ang(nb.i),x=S.cx+(r1+40)*Math.cos(ca),y=S.cy+(r1+40)*Math.sin(ca);pill.textContent=T[nb.i][2];pill.style.left=x+"px";pill.style.top=y+"px";pill.style.opacity=1}else pill.style.opacity=0;
+      requestAnimationFrame(tick)})();}
+
+  // 2: continuous ring + sliding lens
+  function lens(id){const S=setup(id),R=136,TH=60,r0=R-TH/2,r1=R+TH/2;
+    const disc=centerDisc(S,r0-14);const ring=glass(S);const sy=syms(S);const lz=glass(S);const pill=pillEl(S);const op=opener(S);
+    S.w.appendChild(S.ov);sy.forEach(e=>S.w.appendChild(e));S.w.appendChild(pill);
+    let la=ang(0),lh=0;
+    (function tick(){const m=op(0),m2=op(3);disc(m);
+      ring.update(annulus(S.cx,S.cy,lerp(R,r0,m),lerp(R,r1,m)),S.cx,S.cy,lerp(1,1.06,m),5*m,{rimO:m,innerO:.3*m});
+      const nb=nearest(S,R,r0,r1);let target=la;if(nb.i>=0){const snap=ang(nb.i);let d=Math.atan2(Math.sin(nb.a-snap),Math.cos(nb.a-snap));target=snap+d*.35}
+      let diff=Math.atan2(Math.sin(target-la),Math.cos(target-la));la+=diff*.18;lh=lerp(lh,nb.i>=0?1:0,.15);
+      const half=.24,th=TH+14*lh;const cx=S.cx,cy=S.cy;const d=capsule(cx,cy,R,th*lerp(.5,1,m2),la-half,la+half);
+      const sx=cx+R*Math.cos(la),sy2=cy+R*Math.sin(la);
+      S.ov.querySelector("#"+id+"glow").setAttribute("cx",sx);S.ov.querySelector("#"+id+"glow").setAttribute("cy",sy2);
+      lz.update(d,sx,sy2,lerp(1,1.32,m2*Math.max(.35,lh)),lerp(0,1.2,m2),{rimO:m2*lerp(.5,1,lh),rimW:1.6,innerO:.5*m2,glow:.55*lh,tint:"rgba(255,255,255,"+(.05+.05*lh).toFixed(3)+")",bri:1.12});
+      sy.forEach((e,i)=>{const ca=ang(i),x=S.cx+R*Math.cos(ca),y=S.cy+R*Math.sin(ca);const dd=Math.abs(Math.atan2(Math.sin(la-ca),Math.cos(la-ca)));const s=1+.3*Math.max(0,1-dd/.45)*lh;
+        e.style.opacity=op(i+1);e.style.transform="translate("+(x-35)+"px,"+(y-35)+"px) scale("+s.toFixed(3)+")";const lit=overLight(S,x,y);e.style.color=lit?"#1d1d1f":"#fff";e.querySelectorAll("svg,span").forEach(q=>{q.style.filter=lit?"none":"";q.style.textShadow=lit?"none":""})});
+      if(nb.i>=0){const ca=ang(nb.i),x=S.cx+(r1+44)*Math.cos(ca),y=S.cy+(r1+44)*Math.sin(ca);pill.textContent=T[nb.i][2];pill.style.left=x+"px";pill.style.top=y+"px";pill.style.opacity=1}else pill.style.opacity=0;
+      requestAnimationFrame(tick)})();}
+
+  // 3: clear variant with dimming layer
+  function clear(id){const S=setup(id),R=136,TH=68,GAP=9,r0=R-TH/2,r1=R+TH/2;
+    const disc=centerDisc(S,r0-14);const segs=T.map(()=>glass(S));const sy=syms(S);const pill=pillEl(S);const op=opener(S);
+    sy.forEach(e=>{e.querySelector("svg").style.cssText="width:27px;height:27px;stroke-width:2.2";e.querySelector("span").style.cssText="font-size:12px;font-weight:700"});
+    const st=T.map(()=>({h:0,off:0}));
+    (function tick(){const m0=op(0);S.dim.style.opacity=m0;disc(m0);const nb=nearest(S,R,r0,r1);
+      S.ov.querySelector("#"+id+"glow").setAttribute("cx",S.mx);S.ov.querySelector("#"+id+"glow").setAttribute("cy",S.my);
+      segs.forEach((g,i)=>{const m=op(i+1),o=st[i],on=nb.i===i;o.h=lerp(o.h,on?1:0,.2);o.off=lerp(o.off,on?10:0,.2);
+        const ca=ang(i),hs=(STEP/2)*(1+.04*o.h)*lerp(.55,1,m),th=TH*(1+.08*o.h)*lerp(.8,1,m);
+        const cx=S.cx+o.off*Math.cos(ca),cy=S.cy+o.off*Math.sin(ca);const d=rsector(cx,cy,R,th,ca,hs,GAP,17);const sx=cx+R*Math.cos(ca),sy2=cy+R*Math.sin(ca);
+        const lit=overLight(S,sx,sy2);g.update(d,sx,sy2,lerp(1,1.12+.06*o.h,m),lerp(0,1.2,m),{rimO:m,rimW:1.5,innerO:(.45+.25*o.h)*m,glow:o.h,sat:1.3,bri:lit?.92:1.25+.15*o.h,tint:"rgba(255,255,255,"+(.03+.08*o.h).toFixed(3)+")"});
+        const e=sy[i];e.style.opacity=m;e.style.color=lit?"#1d1d1f":"#fff";e.style.transform="translate("+(sx-35)+"px,"+(sy2-35)+"px) scale("+(1+.12*o.h).toFixed(3)+")"});
+      if(nb.i>=0){const ca=ang(nb.i),x=S.cx+(r1+40)*Math.cos(ca),y=S.cy+(r1+40)*Math.sin(ca);pill.textContent=T[nb.i][2];pill.style.left=x+"px";pill.style.top=y+"px";pill.style.opacity=1}else pill.style.opacity=0;
+      requestAnimationFrame(tick)})();}
+
+  function go(){regular("s1",false);lens("s2");clear("s3");regular("s4",true)}
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",go);else setTimeout(go,0);
+})();
+</script>
