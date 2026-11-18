@@ -58,8 +58,12 @@ impl Notifier {
             if t.ok == 0 && t.failed == 0 && t.skipped == 0 {
                 return None;
             }
-            let mut title = if t.ok == 0 && t.skipped > 0 {
-                "Nothing to convert".to_string()
+            let mut title = if t.ok == 0 && t.failed == 0 {
+                // Everything was skipped: say so once.
+                return Some(Notification {
+                    title: format!("Nothing to convert · {} files skipped", t.skipped),
+                    body: "They're already in that format or as small as they get.".into(),
+                });
             } else {
                 format!(
                     "{} file{} converted",
@@ -179,7 +183,7 @@ mod tests {
         }
         assert_eq!(
             n.on_event(&ev("c", 3, "skipped")).unwrap().title,
-            "Nothing to convert · 3 skipped"
+            "Nothing to convert · 3 files skipped"
         );
         let _ = n.on_event(&ev("d", 3, "done"));
         let _ = n.on_event(&ev("d", 3, "skipped"));

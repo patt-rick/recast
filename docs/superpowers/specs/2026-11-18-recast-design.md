@@ -347,7 +347,7 @@ Nothing outside `platform` may call OS APIs directly.
   - `start_jobs(preset_id, paths)`, `cancel_job(id)`, `retry_job(id, fallback)`, `list_jobs(before_seq)` (keyset paging, 50 rows, newest first; each record carries its `seq`), `remove_job(id)`. `retry_job` with `fallback = true` re-runs into the fallback folder (§5.7)
   - `engines_list()`, `engine_install(id)`, `engine_remove(id)`, `engine_verify(id)`
   - `get_settings()`, `set_settings(patch)`
-  - `reveal_job(id)`, `open_job(id)`, `notices()`, `notice_text(index)`
+  - `reveal_job(id)`, `open_job(id)`, `notices()`, `notice_text(index, name)`
   - Planned for Plan 2: `capture_backdrop()`
   - There are deliberately no generic `reveal(path)` or `open(path)` commands, because the webview could pass them any path. `reveal_job` and `open_job` look up the history row and require status `done` and an existing output. `notice_text(index, name)` returns the licence text of a notice (by its index in `notices()`, and fails with "The list changed; reopen Library." if the notice at that index no longer has that name): the installed engine's own licence file (plain text, capped at 512 KB) when present, otherwise the text bundled at `<resource dir>/licenses/` (source: `src-tauri/licenses/`).
   - Commands are `async` and run their blocking work off the main thread. Rust and TS mirror each other (`src/shared/ipc.ts`: `ipc.revealJob`, `ipc.openJob`, `ipc.noticeText`).

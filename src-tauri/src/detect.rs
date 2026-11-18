@@ -98,7 +98,21 @@ fn looks_like_mpeg_ts(head: &[u8]) -> bool {
         // Too short to see a second packet: only the first sync byte can be checked.
         return sync(0);
     }
-    (0..188).any(|k| sync(k) && sync(k + 188)) || (sync(4) && sync(196))
+    // A run of sync bytes `stride` apart from `start`: every packet visible in the head
+    // must start with 0x47 (at least two), so stray 'G's in text don't qualify.
+    let run = |start: usize, stride: usize| {
+        let mut i = start;
+        let mut seen = 0;
+        while i < head.len() {
+            if !sync(i) {
+                return false;
+            }
+            seen += 1;
+            i += stride;
+        }
+        seen >= 2
+    };
+    (0..188).any(|k| run(k, 188)) || run(4, 192)
 }
 
 /// Kind and canonical format from the extension and the first bytes.
@@ -322,11 +336,20 @@ mod tests {
         );
     }
 
+    /// `len` bytes with a 0x47 sync byte every `stride` bytes from `start`, as in a real stream.
+    fn packets(len: usize, start: usize, stride: usize) -> Vec<u8> {
+        let mut v = vec![0u8; len];
+        let mut i = start;
+        while i < len {
+            v[i] = 0x47;
+            i += stride;
+        }
+        v
+    }
+
     #[test]
     fn ts_is_video_only_when_it_looks_like_mpeg_ts() {
-        let mut ts = vec![0u8; 400];
-        ts[0] = 0x47;
-        ts[188] = 0x47;
+        let ts = packets(400, 0, 188);
         assert_eq!(
             classify(Path::new("C:/x/clip.ts"), &ts),
             (Kind::Video, "ts".to_string())
@@ -346,6 +369,7 @@ mod tests {
             Kind::Unknown
         );
         // 0x47 first but no second sync byte: not a transport stream.
+        let mut ts = ts;
         ts[188] = 0;
         assert_eq!(classify(Path::new("C:/x/app.ts"), &ts).0, Kind::Unknown);
         assert_eq!(classify(Path::new("C:/x/empty.ts"), &[]).0, Kind::Unknown);
@@ -355,15 +379,14 @@ mod tests {
     fn ts_accepts_offset_starts_and_192_byte_m2ts_packets() {
         let ts = Path::new("C:/x/clip.ts");
         // Starts mid-packet: syncs at 37 and 225.
-        let mut off = vec![0u8; 512];
-        off[37] = 0x47;
-        off[225] = 0x47;
-        assert_eq!(classify(ts, &off).0, Kind::Video);
+        assert_eq!(classify(ts, &packets(512, 37, 188)).0, Kind::Video);
         // BDAV: 4-byte prefix, stride 192.
-        let mut m2ts = vec![0u8; 512];
-        m2ts[4] = 0x47;
-        m2ts[196] = 0x47;
-        assert_eq!(classify(ts, &m2ts).0, Kind::Video);
+        assert_eq!(classify(ts, &packets(512, 4, 192)).0, Kind::Video);
+        // Two 'G's 188 apart but the next packet position isn't a sync byte: text, not TS.
+        let mut g = vec![b'x'; 512];
+        g[10] = 0x47;
+        g[198] = 0x47;
+        assert_eq!(classify(ts, &g).0, Kind::Unknown);
         // A lone 0x47 in a long head is not enough.
         let mut lone = vec![0u8; 512];
         lone[10] = 0x47;
@@ -377,10 +400,7 @@ mod tests {
     fn detect_reads_enough_head_for_mpeg_ts() {
         let d = tempfile::tempdir().unwrap();
         let p = d.path().join("clip.ts");
-        let mut bytes = vec![0u8; 400];
-        bytes[0] = 0x47;
-        bytes[188] = 0x47;
-        std::fs::write(&p, &bytes).unwrap();
+        std::fs::write(&p, packets(600, 0, 188)).unwrap();
         assert_eq!(detect(&p, &|_| None).unwrap().kind, Kind::Video);
         let q = d.path().join("app.ts");
         std::fs::write(

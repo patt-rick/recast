@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
 const SCHEMA_VERSION: &str = "1";
-const COLS: &str = "seq, id,preset_id, inputs, output, status, error_code, error_detail, stderr_tail, started_at, ended_at, temp_path";
+const COLS: &str = "seq, id, preset_id, inputs, output, status, error_code, error_detail, stderr_tail, started_at, ended_at, temp_path";
 const UNFINISHED: &str = "('queued','waiting_engine','running')";
 
 #[derive(Serialize, Clone, Debug, PartialEq)]

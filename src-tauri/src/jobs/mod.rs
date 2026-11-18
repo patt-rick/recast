@@ -966,9 +966,18 @@ fn detected_format(path: &Path) -> String {
 }
 
 /// "<name> is already PNG." when the input is already the preset's output format.
-/// Uses the same facts as the pad (ffprobe refines ALAC `.m4a` to "alac").
+/// Uses the same facts as the pad: ffprobe refines ALAC `.m4a` to "alac", and that is
+/// the only case where probing changes the format, so only `.m4a` inputs are probed
+/// (probing every video in a large batch would delay the whole batch).
 fn same_format_message(preset: &Preset, input: &Path, host: &dyn EngineHost) -> Option<String> {
-    let format = crate::detect::detect(input, &|p| host.probe(p))
+    let probe = |p: &Path| {
+        if ext_of(p) == "m4a" {
+            host.probe(p)
+        } else {
+            None
+        }
+    };
+    let format = crate::detect::detect(input, &probe)
         .map(|i| i.format)
         .unwrap_or_default();
     (!format.is_empty() && preset.out_format_for(&format) == format)
