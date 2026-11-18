@@ -1,1 +1,107 @@
-//! Filled in by Task 15.
+//! Done/failed notifications; one combined notification for batches of 3+ (spec §4.3).
+use std::collections::HashMap;
+
+use super::JobEvent;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Notification {
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Default)]
+struct Tally {
+    finished: usize,
+    ok: usize,
+    failed: usize,
+}
+
+#[derive(Default)]
+pub struct Notifier {
+    batches: HashMap<String, Tally>,
+}
+
+fn base(p: &str) -> String {
+    p.rsplit(['\\', '/']).next().unwrap_or(p).to_string()
+}
+
+impl Notifier {
+    pub fn on_event(&mut self, ev: &JobEvent) -> Option<Notification> {
+        let status = ev.status.as_str();
+        if !matches!(status, "done" | "skipped" | "failed" | "cancelled") {
+            return None;
+        }
+        if ev.batch_size >= 3 {
+            let t = self.batches.entry(ev.batch_id.clone()).or_default();
+            t.finished += 1;
+            match status {
+                "done" | "skipped" => t.ok += 1,
+                "failed" => t.failed += 1,
+                _ => {}
+            }
+            if t.finished < ev.batch_size {
+                return None;
+            }
+            let t = self.batches.remove(&ev.batch_id).expect("tally exists");
+            if t.ok == 0 && t.failed == 0 {
+                return None;
+            }
+            let mut title = format!("{} file{} converted", t.ok, if t.ok == 1 { "" } else { "s" });
+            if t.failed > 0 {
+                title.push_str(&format!(" · {} failed", t.failed));
+            }
+            return Some(Notification { title, body: "Open Recast to see the results.".into() });
+        }
+        let message = || ev.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+        match status {
+            "done" => Some(Notification {
+                title: format!("{} ready", ev.out_path.as_deref().map(base).unwrap_or_default()),
+                body: format!("{} · from {}", ev.preset_label, ev.file),
+            }),
+            "skipped" => Some(Notification { title: "Nothing to do".into(), body: message() }),
+            "failed" => Some(Notification { title: format!("Couldn't convert {}", ev.file), body: message() }),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jobs::{ErrorCode, JobError};
+
+    fn ev(batch: &str, size: usize, status: &str) -> JobEvent {
+        JobEvent {
+            job_id: "j".into(),
+            batch_id: batch.into(),
+            batch_size: size,
+            preset_id: "video-mp3".into(),
+            preset_label: "MP3".into(),
+            file: "holiday.mov".into(),
+            status: status.into(),
+            pct: None,
+            eta_s: None,
+            out_path: (status == "done").then(|| r"C:\v\holiday.mp3".to_string()),
+            error: (status == "failed").then(|| JobError { code: ErrorCode::EngineFailed, message: "The file looks damaged or incomplete.".into() }),
+        }
+    }
+
+    #[test]
+    fn single_jobs() {
+        let mut n = Notifier::default();
+        assert_eq!(n.on_event(&ev("b", 1, "running")), None);
+        assert_eq!(n.on_event(&ev("b", 1, "done")).unwrap().title, "holiday.mp3 ready");
+        let f = n.on_event(&ev("c", 1, "failed")).unwrap();
+        assert_eq!(f.title, "Couldn't convert holiday.mov");
+        assert_eq!(f.body, "The file looks damaged or incomplete.");
+        assert_eq!(n.on_event(&ev("d", 1, "cancelled")), None);
+    }
+
+    #[test]
+    fn batches_of_three_or_more_notify_once() {
+        let mut n = Notifier::default();
+        assert_eq!(n.on_event(&ev("b", 3, "done")), None);
+        assert_eq!(n.on_event(&ev("b", 3, "failed")), None);
+        assert_eq!(n.on_event(&ev("b", 3, "done")).unwrap().title, "2 files converted · 1 failed");
+    }
+}
