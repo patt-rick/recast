@@ -318,9 +318,8 @@ mod tests {
 
     #[test]
     fn wide_prefixes_only_long_absolute_paths() {
-        let w = |s: &str| {
-            String::from_utf16(&verbatim_wide(std::ffi::OsStr::new(s), true)).unwrap()
-        };
+        let w =
+            |s: &str| String::from_utf16(&verbatim_wide(std::ffi::OsStr::new(s), true)).unwrap();
         assert_eq!(w(r"C:\short\a.txt"), r"C:\short\a.txt");
         assert_eq!(w("C:/short/a.txt"), r"C:\short\a.txt");
         let long = format!(r"C:\{}", "x".repeat(250));

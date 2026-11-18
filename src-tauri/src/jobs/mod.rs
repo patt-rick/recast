@@ -1787,7 +1787,13 @@ passes = [['ok', '{out}']]
         assert_eq!(done.status, "done", "{:?}", done.error);
         assert!(done.out_path.unwrap().ends_with("b.png"));
         assert_eq!(r.names(), ["a.png", "b.jpg", "b.png"], "no (1) copy");
-        let rec = r.history.lock().unwrap().get(&skipped.job_id).unwrap().unwrap();
+        let rec = r
+            .history
+            .lock()
+            .unwrap()
+            .get(&skipped.job_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(rec.status, "skipped");
         assert_eq!(rec.error_code.as_deref(), Some("SAME_FORMAT"));
         assert_eq!(skipped.batch_size, 2);

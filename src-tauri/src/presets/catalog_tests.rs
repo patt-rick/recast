@@ -73,10 +73,7 @@ fn image_ring_order_matches_spec() {
 
 #[test]
 fn pdf_ring_order_matches_spec() {
-    assert_eq!(
-        labels(Kind::Pdf),
-        ["Compress", "Images", "Split", "Merge"]
-    );
+    assert_eq!(labels(Kind::Pdf), ["Compress", "Images", "Split", "Merge"]);
 }
 
 #[test]
@@ -110,7 +107,10 @@ fn no_snapshot_outlives_its_preset() {
 fn stale_snapshot_check_would_notice() {
     // Guards the guard: the file naming it relies on matches what insta writes.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/presets/snapshots");
-    assert!(dir.join("recast_lib__presets__catalog_tests__video-mp3.snap").is_file());
+    assert!(
+        dir.join("recast_lib__presets__catalog_tests__video-mp3.snap")
+            .is_file()
+    );
 }
 
 #[test]

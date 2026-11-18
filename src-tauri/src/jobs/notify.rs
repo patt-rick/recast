@@ -24,7 +24,10 @@ pub struct Notifier {
 /// The Activity row already shows a result while the Recast window is open and in
 /// front, so a toast on top of it is noise. `on_event` still runs for every event
 /// (batch tallies must stay correct); only the toast is dropped.
-pub fn unless_watching(n: Option<Notification>, window_visible_and_focused: bool) -> Option<Notification> {
+pub fn unless_watching(
+    n: Option<Notification>,
+    window_visible_and_focused: bool,
+) -> Option<Notification> {
     n.filter(|_| !window_visible_and_focused)
 }
 

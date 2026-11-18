@@ -325,10 +325,17 @@ mod tests {
             (Kind::Video, "ts".to_string())
         );
         // Short head: only the first sync byte can be checked.
-        assert_eq!(classify(Path::new("C:/x/clip.ts"), &[0x47, 0, 0]).0, Kind::Video);
         assert_eq!(
-            classify(Path::new("C:/x/app.ts"), b"import { a } from './a';
-").0,
+            classify(Path::new("C:/x/clip.ts"), &[0x47, 0, 0]).0,
+            Kind::Video
+        );
+        assert_eq!(
+            classify(
+                Path::new("C:/x/app.ts"),
+                b"import { a } from './a';
+"
+            )
+            .0,
             Kind::Unknown
         );
         // 0x47 first but no second sync byte: not a transport stream.
@@ -347,8 +354,13 @@ mod tests {
         std::fs::write(&p, &bytes).unwrap();
         assert_eq!(detect(&p, &|_| None).unwrap().kind, Kind::Video);
         let q = d.path().join("app.ts");
-        std::fs::write(&q, b"export const a = 1;
-".repeat(30)).unwrap();
+        std::fs::write(
+            &q,
+            b"export const a = 1;
+"
+            .repeat(30),
+        )
+        .unwrap();
         assert_eq!(detect(&q, &|_| None).unwrap().kind, Kind::Unknown);
     }
 

@@ -429,8 +429,8 @@ passes = [['--empty', '--pages', '{inputs}', '--', '{out}']]
 
     #[test]
     fn same_ext_falls_back_to_the_detected_format() {
-        let same = Catalog::parse(&MINI.replace("out_ext = \"mp3\"", "out_ext = \"same\""))
-            .unwrap();
+        let same =
+            Catalog::parse(&MINI.replace("out_ext = \"mp3\"", "out_ext = \"same\"")).unwrap();
         let p = same.get("v-mp3").unwrap();
         let ext = |path: &str, fmt: &str| p.out_ext_for(std::path::Path::new(path), fmt);
         assert_eq!(ext("C:/a/b.PNG", "jpeg"), "png", "an extension wins");
