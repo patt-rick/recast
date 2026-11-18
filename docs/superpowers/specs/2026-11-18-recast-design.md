@@ -47,6 +47,7 @@ Recast is **not a fork**. It shares no code with File Converter and is not bound
 | D10 | macOS | Later. v1 isolates OS-specific code behind a `platform` module (§6.9) |
 | D11 | Name / location | **Recast**, repo at `Desktop/repos/recast` |
 | D12 | Licence | **MIT** for Recast's own code. Third-party engines keep their own licences and are listed in Library → Third-party notices (§4.5) |
+| D13 | App icon | "Shredder, video in" on a dark tile, light-tile alternate (§12, `assets/icon/`) |
 
 ---
 
@@ -433,4 +434,4 @@ Logs go to `%LOCALAPPDATA%\Recast\logs\recast.log` (rotating, 5 × 1 MB). Logs a
 
 ## 12. Open questions (owner)
 1. ~~Recast's own licence~~ **Resolved: MIT** (D12, §8).
-2. **App icon / brand mark:** needed before the first installer build. Direction: **Prism** (variations in progress).
+2. ~~App icon / brand mark~~ **Resolved: "Shredder, video in"** (D13). A blue video file feeds into a glass slot and comes out as four tagged strips: audio (pink, note), GIF (amber, sparkle), WebM (green, globe), compressed (purple, shrink arrows). These are the pad's real video tools. The dark tile is primary and the light tile is the alternate. Masters: `assets/icon/recast-icon.svg` (dark), `assets/icon/recast-icon-light.svg`; tray glyphs: `assets/icon/tray-dark-taskbar.svg`, `assets/icon/tray-light-taskbar.svg` (16 px, monochrome, chosen to match the Windows taskbar theme). The `.ico` (16/20/24/32/40/48/64/256) and Tauri icon set are generated from the dark master at build time via `tauri icon`. At ≤32 px the strip symbols drop out by design, and the coloured strips carry the mark.
