@@ -100,3 +100,11 @@ export function split(s: JobsState): { active: JobView[]; history: JobView[] } {
   const all = s.order.map((id) => s.byId[id]);
   return { active: all.filter((j) => ACTIVE.includes(j.status)), history: all.filter((j) => !ACTIVE.includes(j.status)) };
 }
+
+/** Rows per `list_jobs` page (matches the backend). */
+export const PAGE_SIZE = 50;
+
+/** Append one more page of history without duplicating rows already shown; `more` is false once a page comes back short. */
+export function appendHistory(s: JobsState, records: JobRecord[]): { state: JobsState; more: boolean } {
+  return { state: seed(s, records), more: records.length >= PAGE_SIZE };
+}

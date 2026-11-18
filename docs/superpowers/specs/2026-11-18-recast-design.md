@@ -102,6 +102,7 @@ running ──new trigger──► the running job continues in Activity; the pa
 - **One pad at a time:** a trigger while the pad is open reuses it (see the last transition above).
 
 - **Running:** the segments retract into the disc and the disc's rim becomes a progress ring. It's indeterminate when the engine reports no progress (§6.4). The pad can be dismissed with Esc or by clicking outside it. The job keeps running and appears in Activity.
+- **Notifications** are not shown while the Recast window is visible and focused: the Activity row already says it. Engine-install failures still notify.
 - **Done:** Windows notification, "holiday.mp3 ready", with a **Show in folder** action. A batch of **3 or more** files sends **one** combined notification when the batch ends ("8 files converted · 1 failed").
 - **Failed:** notification, "Couldn't convert holiday.mov", with a **Details** action that opens Activity at that job.
 - **Keyboard:** when the pad is open, ←/→ (or Tab) move around the ring, Enter runs the focused segment, and Esc closes.
@@ -135,7 +136,7 @@ A 760 × 520 window opened from the tray icon (left-click) or the tray menu. Sam
 2. **Tools:** multi-file jobs that need ordering. **Merge PDFs** and **Images → PDF** use a reorderable list (drag handles, or add files) and a Run button. **Split PDF** takes a page-range field (`1-3, 5, 8-`).
    - Reordering uses a **pointer-event sorter (dnd-kit)**, not HTML5 drag-and-drop: Tauri's `dragDropEnabled` must stay on so the window accepts file drops, and on Windows that disables HTML5 drag-and-drop inside the webview.
 3. **Library:** one row per engine: name, version, size, licence and status (Not installed / Installing x% / Installed / Damaged). Actions: Download, Remove, Verify. A footer shows the total disk used. Future engines (LibreOffice, LaTeX) appear here as "Coming later".
-   - **Third-party notices:** a view listing every engine and bundled component (including 7-Zip, §6.3) with its licence text, upstream homepage and, for GPL/AGPL/LGPL items, where to get the corresponding source.
+   - **Third-party notices:** a view listing every engine and bundled component (including 7-Zip, §6.3) with its licence text (a Licence button expands it inline, whether or not the engine is installed; GPL-3.0, GPL-2.0, AGPL-3.0, Apache-2.0 and ImageMagick texts ship with Recast), upstream homepage and, for GPL/AGPL/LGPL items, where to get the corresponding source.
 4. **Settings:**
    - **Triggers:** on/off for each; edge and position for the edge handle.
    - **Defaults:** quality per format (§5).
@@ -166,6 +167,8 @@ Presets are **data**, in `src-tauri/presets/presets.toml`. Each preset has:
 - `skip_formats` (optional): canonical input formats the preset is hidden for. Image Shrink is hidden for GIF and ICO
 - `keep_same_format`: exempts the preset from same-format hiding (the data-driven form of the Shrink/Compress exception)
 - `hide_when_multi`: hidden when more than one file is dropped
+- Same-format skipping is per file at run time: in a mixed batch (PNG + JPEG → PNG), an input already in the preset's output format finishes as `skipped` with `SAME_FORMAT` ("x.png is already PNG.") and is not re-encoded. `"same"` outputs for an extensionless input take the extension of the sniffed format (`jpg`, `tif`, `heic`, otherwise the format name).
+- `.ts` is video only when the content looks like MPEG-TS (sync byte 0x47 at offsets 0 and 188); otherwise (TypeScript) the file is not offered video presets.
 - `discard_if_not_smaller`: if the output isn't smaller than the input, it is discarded and the job reports `ALREADY_SMALL` (image Shrink, PDF Compress)
 - `stage_inputs`: inputs are staged into the job's temp dir (§6.4). Used for ImageMagick and Ghostscript
 - `extra_outputs` (optional): additional files the command writes that are kept alongside the main output
@@ -344,10 +347,10 @@ Nothing outside `platform` may call OS APIs directly.
   - `start_jobs(preset_id, paths)`, `cancel_job(id)`, `retry_job(id, fallback)`, `list_jobs(page)`, `remove_job(id)`. `retry_job` with `fallback = true` re-runs into the fallback folder (§5.7)
   - `engines_list()`, `engine_install(id)`, `engine_remove(id)`, `engine_verify(id)`
   - `get_settings()`, `set_settings(patch)`
-  - `reveal_job(id)`, `open_job(id)`, `reveal_notice(index)`, `notices()`
+  - `reveal_job(id)`, `open_job(id)`, `notices()`, `notice_text(index)`
   - Planned for Plan 2: `capture_backdrop()`
-  - There are deliberately no generic `reveal(path)` or `open(path)` commands, because the webview could pass them any path. `reveal_job` and `open_job` look up the history row and require status `done` and an existing output. `reveal_notice` shows a licence file by its index in `notices()`.
-  - Commands are `async` and run their blocking work off the main thread. Rust and TS mirror each other (`src/shared/ipc.ts`: `ipc.revealJob`, `ipc.openJob`, `ipc.revealNotice`).
+  - There are deliberately no generic `reveal(path)` or `open(path)` commands, because the webview could pass them any path. `reveal_job` and `open_job` look up the history row and require status `done` and an existing output. `notice_text(index)` returns the licence text of a notice (by its index in `notices()`): the installed engine's own licence file (plain text, capped at 512 KB) when present, otherwise the text bundled in `resources/licenses/`.
+  - Commands are `async` and run their blocking work off the main thread. Rust and TS mirror each other (`src/shared/ipc.ts`: `ipc.revealJob`, `ipc.openJob`, `ipc.noticeText`).
 - **Events:** `job://*`, `engine://progress|done|failed`, `pad://open{paths, anchor}`.
 
 ### 6.12 Installer and uninstall

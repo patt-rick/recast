@@ -3,10 +3,11 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ipc, onJobEvent } from "../shared/ipc";
 import { formatBytes, formatEta } from "../shared/format";
 import type { JobEvent, JobRecord, PadModel } from "../shared/types";
-import { applyEvent, batchSuffix, empty, remove, seed, split, withRecord, type JobsState, type JobView } from "./jobs";
+import { appendHistory, applyEvent, batchSuffix, empty, PAGE_SIZE, remove, seed, split, withRecord, type JobsState, type JobView } from "./jobs";
 
 type Action =
   | { type: "seed"; records: JobRecord[] }
+  | { type: "more"; records: JobRecord[] }
   | { type: "event"; e: JobEvent }
   | { type: "record"; r: JobRecord }
   | { type: "remove"; id: string };
@@ -15,6 +16,8 @@ function reducer(s: JobsState, a: Action): JobsState {
   switch (a.type) {
     case "seed":
       return seed(s, a.records);
+    case "more":
+      return appendHistory(s, a.records).state;
     case "event":
       return applyEvent(s, a.e);
     case "record":
@@ -35,13 +38,35 @@ export function Activity({ onDrop }: { onDrop: () => void }) {
   const [hovering, setHovering] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Next history page to fetch, and whether the last page was full.
+  const [nextPage, setNextPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const report = (e: unknown) => setError(String(e));
   const onDropRef = useRef(onDrop);
   onDropRef.current = onDrop;
 
   useEffect(() => {
-    ipc.listJobs(0).then((records) => dispatch({ type: "seed", records })).catch((e) => setError(String(e)));
+    ipc.listJobs(0).then((records) => {
+      dispatch({ type: "seed", records });
+      setHasMore(records.length >= PAGE_SIZE);
+    }).catch((e) => setError(String(e)));
   }, []);
+
+  async function loadMore() {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const records = await ipc.listJobs(nextPage);
+      dispatch({ type: "more", records });
+      setNextPage(nextPage + 1);
+      setHasMore(records.length >= PAGE_SIZE);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   useEffect(() => {
     const off = onJobEvent((e) => {
@@ -123,6 +148,11 @@ export function Activity({ onDrop }: { onDrop: () => void }) {
             <JobRow key={j.id} job={j} dispatch={dispatch} report={report} />
           ))}
         </ul>
+      )}
+      {hasMore && (
+        <button className="load-more" disabled={loadingMore} onClick={loadMore}>
+          {loadingMore ? "Loading…" : "Load more"}
+        </button>
       )}
     </section>
   );

@@ -1,5 +1,5 @@
 import type { JobEvent, JobRecord } from "../shared/types";
-import { applyEvent, batchSuffix, empty, remove, seed, split, withRecord } from "./jobs";
+import { appendHistory, applyEvent, batchSuffix, empty, PAGE_SIZE, remove, seed, split, withRecord } from "./jobs";
 
 const ev = (over: Partial<JobEvent>): JobEvent => ({
   job_id: "j1", batch_id: "b", batch_size: 1, preset_id: "video-mp3", preset_label: "MP3", file: "holiday.mov",
@@ -74,4 +74,19 @@ test("withRecord adds the stderr tail; remove drops a job", () => {
   expect(s.byId.j1.stderrTail).toBe("boom");
   s = remove(s, "j1");
   expect(s.order).toEqual([]);
+});
+
+test("load more appends the next page without duplicates and stops on a short page", () => {
+  const page = (from: number, n: number) => Array.from({ length: n }, (_, i) => rec({ id: `h${from + i}` }));
+  let s = seed(empty, page(0, PAGE_SIZE));
+  // A row already shown (e.g. it moved between pages while new jobs arrived) is not added twice.
+  const next = appendHistory(s, [...page(PAGE_SIZE - 1, 1), ...page(PAGE_SIZE, PAGE_SIZE - 1)]);
+  expect(next.state.order).toHaveLength(PAGE_SIZE * 2 - 1);
+  expect(new Set(next.state.order).size).toBe(next.state.order.length);
+  expect(next.state.order.slice(-1)).toEqual([`h${PAGE_SIZE * 2 - 2}`]);
+  expect(next.more).toBe(true);
+  const last = appendHistory(next.state, page(PAGE_SIZE * 2, 3));
+  expect(last.state.order).toHaveLength(PAGE_SIZE * 2 + 2);
+  expect(last.more).toBe(false);
+  expect(appendHistory(s, []).more).toBe(false);
 });
