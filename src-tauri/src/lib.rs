@@ -14,3 +14,6 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running Recast");
 }
+
+#[cfg(test)]
+mod testutil;
