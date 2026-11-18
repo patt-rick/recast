@@ -2,3 +2,6 @@
 node_modules/
 target/
 dist/
+.cache/
+*.snap.new
+src-tauri/gen/schemas/
