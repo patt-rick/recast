@@ -17,8 +17,14 @@ pub fn parse_magick_formats(out: &str) -> BTreeSet<String> {
             continue;
         }
         // Some builds print a Module column between Format and Mode, some don't.
-        let is_mode = |s: &str| s.len() == 3 && s.bytes().all(|c| matches!(c, b'r' | b'w' | b'+' | b'-'));
-        let Some(mode) = t[1..3].iter().copied().find(|s| is_mode(s)).map(|s| s.as_bytes()) else {
+        let is_mode =
+            |s: &str| s.len() == 3 && s.bytes().all(|c| matches!(c, b'r' | b'w' | b'+' | b'-'));
+        let Some(mode) = t[1..3]
+            .iter()
+            .copied()
+            .find(|s| is_mode(s))
+            .map(|s| s.as_bytes())
+        else {
             continue;
         };
         let fmt = t[0].trim_end_matches('*').to_ascii_lowercase();
@@ -66,7 +72,11 @@ mod tests {
       JXL* rw+   JPEG XL (ISO/IEC 18181) (libjxl 0.13.0)
 ",
         );
-        assert!(c.contains("magick:write:avif") && c.contains("magick:read:heic") && !c.contains("magick:write:heic"));
+        assert!(
+            c.contains("magick:write:avif")
+                && c.contains("magick:read:heic")
+                && !c.contains("magick:write:heic")
+        );
         assert!(c.contains("magick:write:jxl"));
         assert_eq!(c.len(), 5);
     }

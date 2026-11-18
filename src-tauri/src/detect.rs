@@ -15,10 +15,18 @@ pub enum Kind {
     Unknown,
 }
 
-const VIDEO: &[&str] = &["mp4", "mkv", "mov", "webm", "avi", "wmv", "flv", "m4v", "mpg", "ts", "3gp"];
-const AUDIO: &[&str] = &["mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "wma", "aiff", "aif", "alac"];
-const IMAGE: &[&str] = &["jpg", "jpeg", "png", "webp", "avif", "heic", "heif", "jxl", "bmp", "tif", "tiff", "gif", "ico"];
-const TEXT: &[&str] = &["epub", "docx", "odt", "md", "markdown", "html", "htm", "txt", "rtf"];
+const VIDEO: &[&str] = &[
+    "mp4", "mkv", "mov", "webm", "avi", "wmv", "flv", "m4v", "mpg", "ts", "3gp",
+];
+const AUDIO: &[&str] = &[
+    "mp3", "m4a", "aac", "wav", "flac", "ogg", "opus", "wma", "aiff", "aif", "alac",
+];
+const IMAGE: &[&str] = &[
+    "jpg", "jpeg", "png", "webp", "avif", "heic", "heif", "jxl", "bmp", "tif", "tiff", "gif", "ico",
+];
+const TEXT: &[&str] = &[
+    "epub", "docx", "odt", "md", "markdown", "html", "htm", "txt", "rtf",
+];
 
 pub fn kind_for_ext(ext: &str) -> Kind {
     let e = ext.to_ascii_lowercase();
@@ -52,7 +60,9 @@ pub fn canonical(ext: &str) -> String {
 }
 
 pub fn ext_of(path: &Path) -> String {
-    path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default()
+    path.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default()
 }
 
 fn kind_for_mime(mime: &str) -> Kind {
@@ -125,7 +135,10 @@ struct JFormat {
 pub fn parse_ffprobe_json(s: &str) -> Option<Probe> {
     let j: JProbe = serde_json::from_str(s).ok()?;
     let mut p = Probe {
-        duration_s: j.format.and_then(|f| f.duration).and_then(|d| d.parse().ok()),
+        duration_s: j
+            .format
+            .and_then(|f| f.duration)
+            .and_then(|d| d.parse().ok()),
         ..Default::default()
     };
     for st in j.streams {
@@ -162,7 +175,10 @@ impl FileInfo {
     pub fn bare(path: &Path, kind: Kind, format: String, size: u64) -> Self {
         Self {
             path: path.to_path_buf(),
-            name: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            name: path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             kind,
             ext: ext_of(path),
             format,
@@ -194,9 +210,10 @@ pub fn detect(path: &Path, probe: &dyn Fn(&Path) -> Option<Probe>) -> std::io::R
     let (kind, format) = classify(path, &head[..n]);
     let mut info = FileInfo::bare(path, kind, format, meta.len());
     if matches!(kind, Kind::Video | Kind::Audio)
-        && let Some(p) = probe(path) {
-            refine(&mut info, &p);
-        }
+        && let Some(p) = probe(path)
+    {
+        refine(&mut info, &p);
+    }
     Ok(info)
 }
 
@@ -204,8 +221,12 @@ pub fn detect(path: &Path, probe: &dyn Fn(&Path) -> Option<Probe>) -> std::io::R
 mod tests {
     use super::*;
 
-    const PNG: [u8; 16] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R'];
-    const MP4: [u8; 16] = [0, 0, 0, 0x18, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm', 0, 0, 2, 0];
+    const PNG: [u8; 16] = [
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R',
+    ];
+    const MP4: [u8; 16] = [
+        0, 0, 0, 0x18, b'f', b't', b'y', b'p', b'i', b's', b'o', b'm', 0, 0, 2, 0,
+    ];
 
     #[test]
     fn canonical_formats() {
@@ -231,18 +252,30 @@ mod tests {
 
     #[test]
     fn magic_bytes_correct_a_misnamed_image() {
-        assert_eq!(classify(Path::new("C:/x/photo.jpg"), &PNG), (Kind::Image, "png".to_string()));
+        assert_eq!(
+            classify(Path::new("C:/x/photo.jpg"), &PNG),
+            (Kind::Image, "png".to_string())
+        );
     }
 
     #[test]
     fn extension_wins_between_audio_and_video_containers() {
-        assert_eq!(classify(Path::new("C:/x/song.m4a"), &MP4), (Kind::Audio, "m4a".to_string()));
-        assert_eq!(classify(Path::new("C:/x/clip.mp4"), &MP4), (Kind::Video, "mp4".to_string()));
+        assert_eq!(
+            classify(Path::new("C:/x/song.m4a"), &MP4),
+            (Kind::Audio, "m4a".to_string())
+        );
+        assert_eq!(
+            classify(Path::new("C:/x/clip.mp4"), &MP4),
+            (Kind::Video, "mp4".to_string())
+        );
     }
 
     #[test]
     fn magic_bytes_rescue_an_unknown_extension() {
-        assert_eq!(classify(Path::new("C:/x/download.bin"), &PNG), (Kind::Image, "png".to_string()));
+        assert_eq!(
+            classify(Path::new("C:/x/download.bin"), &PNG),
+            (Kind::Image, "png".to_string())
+        );
     }
 
     #[test]
@@ -252,18 +285,42 @@ mod tests {
             {"codec_type":"audio","codec_name":"alac","disposition":{"attached_pic":0}}],
             "format":{"duration":"134.5"}}"#;
         let p = parse_ffprobe_json(json).unwrap();
-        assert_eq!(p, Probe { duration_s: Some(134.5), has_audio: true, has_video: false, audio_codec: Some("alac".into()) });
+        assert_eq!(
+            p,
+            Probe {
+                duration_s: Some(134.5),
+                has_audio: true,
+                has_video: false,
+                audio_codec: Some("alac".into())
+            }
+        );
     }
 
     #[test]
     fn refine_turns_audio_only_mov_into_audio_and_alac_m4a_into_alac() {
         let mut mov = FileInfo::bare(Path::new("C:/x/voice.mov"), Kind::Video, "mov".into(), 10);
-        refine(&mut mov, &Probe { duration_s: Some(3.0), has_audio: true, has_video: false, audio_codec: Some("aac".into()) });
+        refine(
+            &mut mov,
+            &Probe {
+                duration_s: Some(3.0),
+                has_audio: true,
+                has_video: false,
+                audio_codec: Some("aac".into()),
+            },
+        );
         assert_eq!(mov.kind, Kind::Audio);
         assert_eq!(mov.duration_s, Some(3.0));
 
         let mut m4a = FileInfo::bare(Path::new("C:/x/song.m4a"), Kind::Audio, "m4a".into(), 10);
-        refine(&mut m4a, &Probe { duration_s: None, has_audio: true, has_video: false, audio_codec: Some("alac".into()) });
+        refine(
+            &mut m4a,
+            &Probe {
+                duration_s: None,
+                has_audio: true,
+                has_video: false,
+                audio_codec: Some("alac".into()),
+            },
+        );
         assert_eq!(m4a.format, "alac");
         assert_eq!(m4a.has_audio, Some(true));
     }

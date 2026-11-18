@@ -4,9 +4,9 @@ use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -60,7 +60,11 @@ enum Line {
     Err(String),
 }
 
-fn spawn_reader<R: Read + Send + 'static>(r: R, tx: Sender<Line>, wrap: fn(String) -> Line) -> JoinHandle<()> {
+fn spawn_reader<R: Read + Send + 'static>(
+    r: R,
+    tx: Sender<Line>,
+    wrap: fn(String) -> Line,
+) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut reader = BufReader::new(r);
         let mut buf = Vec::new();
@@ -82,7 +86,13 @@ fn spawn_reader<R: Read + Send + 'static>(r: R, tx: Sender<Line>, wrap: fn(Strin
     })
 }
 
-fn absorb(line: Line, tracker: &mut Tracker, tail: &mut VecDeque<String>, last_advance: &mut Instant, on_pct: &mut dyn FnMut(f32)) {
+fn absorb(
+    line: Line,
+    tracker: &mut Tracker,
+    tail: &mut VecDeque<String>,
+    last_advance: &mut Instant,
+    on_pct: &mut dyn FnMut(f32),
+) {
     let text = match line {
         Line::Out(s) => {
             let f = tracker.feed(&s);
@@ -105,10 +115,18 @@ fn absorb(line: Line, tracker: &mut Tracker, tail: &mut VecDeque<String>, last_a
     tail.push_back(text);
 }
 
-pub fn run(spec: &RunSpec, cancel: &CancelToken, on_pct: &mut dyn FnMut(f32)) -> io::Result<RunResult> {
+pub fn run(
+    spec: &RunSpec,
+    cancel: &CancelToken,
+    on_pct: &mut dyn FnMut(f32),
+) -> io::Result<RunResult> {
     let group = platform::KillGroup::new()?;
     let mut cmd = Command::new(&spec.program);
-    cmd.args(&spec.args).current_dir(&spec.cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(&spec.args)
+        .current_dir(&spec.cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     for (k, v) in &spec.env {
         cmd.env(k, v);
     }
@@ -116,7 +134,11 @@ pub fn run(spec: &RunSpec, cancel: &CancelToken, on_pct: &mut dyn FnMut(f32)) ->
     let mut child = platform::spawn_contained(&mut cmd, &group)?;
     let (tx, rx) = mpsc::channel();
     let readers = [
-        spawn_reader(child.stdout.take().expect("piped stdout"), tx.clone(), Line::Out),
+        spawn_reader(
+            child.stdout.take().expect("piped stdout"),
+            tx.clone(),
+            Line::Out,
+        ),
         spawn_reader(child.stderr.take().expect("piped stderr"), tx, Line::Err),
     ];
     let mut tracker = Tracker::new(spec.progress, spec.duration_s);
@@ -158,7 +180,10 @@ pub fn run(spec: &RunSpec, cancel: &CancelToken, on_pct: &mut dyn FnMut(f32)) ->
     for line in rx.try_iter() {
         absorb(line, &mut tracker, &mut tail, &mut last_advance, on_pct);
     }
-    Ok(RunResult { outcome, tail: tail.into() })
+    Ok(RunResult {
+        outcome,
+        tail: tail.into(),
+    })
 }
 
 #[cfg(test)]
@@ -166,7 +191,12 @@ mod tests {
     use super::*;
     use crate::testutil::fake_engine;
 
-    fn spec(dir: &std::path::Path, args: &[&str], progress: ProgressKind, stall_ms: u64) -> RunSpec {
+    fn spec(
+        dir: &std::path::Path,
+        args: &[&str],
+        progress: ProgressKind,
+        stall_ms: u64,
+    ) -> RunSpec {
         RunSpec {
             program: fake_engine(),
             args: args.iter().map(OsString::from).collect(),
@@ -183,18 +213,35 @@ mod tests {
     fn success_reports_progress_and_writes_output() {
         let d = tempfile::tempdir().unwrap();
         let mut pcts = Vec::new();
-        let r = run(&spec(d.path(), &["ok", "out.txt"], ProgressKind::Ffmpeg, 5000), &CancelToken::default(), &mut |p| pcts.push(p)).unwrap();
+        let r = run(
+            &spec(d.path(), &["ok", "out.txt"], ProgressKind::Ffmpeg, 5000),
+            &CancelToken::default(),
+            &mut |p| pcts.push(p),
+        )
+        .unwrap();
         assert_eq!(r.outcome, RunOutcome::Exited(0));
         assert_eq!(pcts.last(), Some(&1.0));
         assert!(pcts.windows(2).all(|w| w[0] <= w[1]));
-        assert_eq!(std::fs::read_to_string(d.path().join("out.txt")).unwrap(), "converted");
-        assert!(r.tail.is_empty(), "progress lines are not kept: {:?}", r.tail);
+        assert_eq!(
+            std::fs::read_to_string(d.path().join("out.txt")).unwrap(),
+            "converted"
+        );
+        assert!(
+            r.tail.is_empty(),
+            "progress lines are not kept: {:?}",
+            r.tail
+        );
     }
 
     #[test]
     fn failure_keeps_stderr_tail() {
         let d = tempfile::tempdir().unwrap();
-        let r = run(&spec(d.path(), &["fail"], ProgressKind::None, 5000), &CancelToken::default(), &mut |_| {}).unwrap();
+        let r = run(
+            &spec(d.path(), &["fail"], ProgressKind::None, 5000),
+            &CancelToken::default(),
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(r.outcome, RunOutcome::Exited(3));
         assert!(r.tail.iter().any(|l| l.contains("Invalid data")));
     }
@@ -203,7 +250,17 @@ mod tests {
     fn stall_watchdog_kills_silent_engine() {
         let d = tempfile::tempdir().unwrap();
         let t = Instant::now();
-        let r = run(&spec(d.path(), &["hang_after_progress"], ProgressKind::Ffmpeg, 500), &CancelToken::default(), &mut |_| {}).unwrap();
+        let r = run(
+            &spec(
+                d.path(),
+                &["hang_after_progress"],
+                ProgressKind::Ffmpeg,
+                500,
+            ),
+            &CancelToken::default(),
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(r.outcome, RunOutcome::Stalled);
         assert!(t.elapsed() < Duration::from_secs(5));
     }
@@ -211,7 +268,12 @@ mod tests {
     #[test]
     fn hard_cap_applies_when_engine_reports_no_progress() {
         let d = tempfile::tempdir().unwrap();
-        let r = run(&spec(d.path(), &["hang"], ProgressKind::None, 500), &CancelToken::default(), &mut |_| {}).unwrap();
+        let r = run(
+            &spec(d.path(), &["hang"], ProgressKind::None, 500),
+            &CancelToken::default(),
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(r.outcome, RunOutcome::Stalled);
     }
 
@@ -224,18 +286,40 @@ mod tests {
             std::thread::sleep(Duration::from_millis(700));
             c2.cancel();
         });
-        let r = run(&spec(d.path(), &["spawn_child"], ProgressKind::None, 60_000), &cancel, &mut |_| {}).unwrap();
+        let r = run(
+            &spec(d.path(), &["spawn_child"], ProgressKind::None, 60_000),
+            &cancel,
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(r.outcome, RunOutcome::Cancelled);
-        let pid: u32 = r.tail.iter().find_map(|l| l.strip_prefix("child=")).expect("child pid in tail").parse().unwrap();
+        let pid: u32 = r
+            .tail
+            .iter()
+            .find_map(|l| l.strip_prefix("child="))
+            .expect("child pid in tail")
+            .parse()
+            .unwrap();
         std::thread::sleep(Duration::from_millis(200));
-        assert!(!crate::platform::is_process_alive(pid), "grandchild survived");
+        assert!(
+            !crate::platform::is_process_alive(pid),
+            "grandchild survived"
+        );
     }
 
     #[test]
     fn passes_extra_environment() {
         let d = tempfile::tempdir().unwrap();
-        let mut s = spec(d.path(), &["print_env", "MAGICK_CONFIGURE_PATH"], ProgressKind::None, 5000);
-        s.env = vec![(OsString::from("MAGICK_CONFIGURE_PATH"), OsString::from(r"C:\magick"))];
+        let mut s = spec(
+            d.path(),
+            &["print_env", "MAGICK_CONFIGURE_PATH"],
+            ProgressKind::None,
+            5000,
+        );
+        s.env = vec![(
+            OsString::from("MAGICK_CONFIGURE_PATH"),
+            OsString::from(r"C:\magick"),
+        )];
         let r = run(&s, &CancelToken::default(), &mut |_| {}).unwrap();
         assert_eq!(r.outcome, RunOutcome::Exited(0));
         assert_eq!(r.tail, [r"C:\magick"]);
@@ -245,7 +329,12 @@ mod tests {
     fn chatty_stderr_does_not_deadlock() {
         let d = tempfile::tempdir().unwrap();
         let t = Instant::now();
-        let r = run(&spec(d.path(), &["chatty"], ProgressKind::None, 20_000), &CancelToken::default(), &mut |_| {}).unwrap();
+        let r = run(
+            &spec(d.path(), &["chatty"], ProgressKind::None, 20_000),
+            &CancelToken::default(),
+            &mut |_| {},
+        )
+        .unwrap();
         assert_eq!(r.outcome, RunOutcome::Exited(0));
         assert_eq!(r.tail.len(), TAIL_LINES);
         assert!(t.elapsed() < Duration::from_secs(15));

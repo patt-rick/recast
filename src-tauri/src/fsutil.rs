@@ -37,7 +37,11 @@ pub fn walk_files(root: &Path) -> Vec<PathBuf> {
 }
 
 pub fn dir_size(root: &Path) -> u64 {
-    walk_files(root).iter().filter_map(|p| fs::metadata(p).ok()).map(|m| m.len()).sum()
+    walk_files(root)
+        .iter()
+        .filter_map(|p| fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum()
 }
 
 /// fs::rename, retried with backoff (100 ms, doubling) while antivirus or sync

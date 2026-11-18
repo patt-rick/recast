@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::command::{build_command, BuildInput};
+use super::command::{BuildInput, build_command};
 use super::*;
 
 fn sample_ext(p: &Preset) -> &'static str {
@@ -29,14 +29,25 @@ pub(crate) fn engine_bins() -> HashMap<String, Vec<String>> {
 #[test]
 fn bundled_catalog_is_valid() {
     let c = Catalog::parse(BUNDLED).unwrap();
-    c.validate(&engine_bins(), &crate::settings::var_keys()).unwrap();
+    c.validate(&engine_bins(), &crate::settings::var_keys())
+        .unwrap();
 }
 
 #[test]
 fn video_ring_order_matches_spec() {
     let c = Catalog::parse(BUNDLED).unwrap();
-    let ids: Vec<&str> = c.presets.iter().filter(|p| p.kinds.contains(&Kind::Video)).map(|p| p.label.as_str()).collect();
-    assert_eq!(ids, ["MP3", "MP4", "GIF", "WebM", "Shrink", "M4A", "MKV", "MOV", "Opus", "WAV"]);
+    let ids: Vec<&str> = c
+        .presets
+        .iter()
+        .filter(|p| p.kinds.contains(&Kind::Video))
+        .map(|p| p.label.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "MP3", "MP4", "GIF", "WebM", "Shrink", "M4A", "MKV", "MOV", "Opus", "WAV"
+        ]
+    );
 }
 
 #[test]
@@ -50,11 +61,29 @@ fn every_preset_argv_snapshot() {
         let ext = sample_ext(p);
         let n = p.min_files;
         let inputs: Vec<PathBuf> = (1..=n)
-            .map(|i| if p.stage_inputs { PathBuf::from(format!("in-{i}.{ext}")) } else { PathBuf::from(format!(r"C:\in\café 日本 %[1] -x{i}.{ext}")) })
+            .map(|i| {
+                if p.stage_inputs {
+                    PathBuf::from(format!("in-{i}.{ext}"))
+                } else {
+                    PathBuf::from(format!(r"C:\in\café 日本 %[1] -x{i}.{ext}"))
+                }
+            })
             .collect();
         let out_ext = p.out_ext_for(Path::new(&format!("x.{ext}")));
-        let passes = build_command(p, &BuildInput { inputs: &inputs, in_dir: Path::new(r"C:\in"), out_ext: &out_ext, vars: &vars }).unwrap();
-        let argv: Vec<Vec<String>> = passes.iter().map(|a| a.iter().map(|s| s.to_string_lossy().into_owned()).collect()).collect();
+        let passes = build_command(
+            p,
+            &BuildInput {
+                inputs: &inputs,
+                in_dir: Path::new(r"C:\in"),
+                out_ext: &out_ext,
+                vars: &vars,
+            },
+        )
+        .unwrap();
+        let argv: Vec<Vec<String>> = passes
+            .iter()
+            .map(|a| a.iter().map(|s| s.to_string_lossy().into_owned()).collect())
+            .collect();
         insta::assert_debug_snapshot!(p.id.clone(), argv);
     }
 }

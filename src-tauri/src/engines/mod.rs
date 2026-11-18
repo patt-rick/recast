@@ -104,7 +104,10 @@ impl Leases {
             }
             if !s.writer && s.readers == 0 {
                 s.writer = true;
-                return Ok(Exclusive { leases: self.clone(), id: id.to_string() });
+                return Ok(Exclusive {
+                    leases: self.clone(),
+                    id: id.to_string(),
+                });
             }
             g = wait(&self.cv, g);
         }
@@ -145,7 +148,12 @@ pub struct Engines {
 }
 
 impl Engines {
-    pub fn new(manifest: Manifest, root: PathBuf, sevenzip: PathBuf, fetcher: Box<dyn Fetcher>) -> Self {
+    pub fn new(
+        manifest: Manifest,
+        root: PathBuf,
+        sevenzip: PathBuf,
+        fetcher: Box<dyn Fetcher>,
+    ) -> Self {
         Self {
             manifest,
             root,
@@ -176,7 +184,9 @@ impl Engines {
     }
 
     fn entry(&self, id: &str) -> Result<&EngineEntry, String> {
-        self.manifest.get(id).ok_or_else(|| format!("unknown engine '{id}'"))
+        self.manifest
+            .get(id)
+            .ok_or_else(|| format!("unknown engine '{id}'"))
     }
 
     pub fn status(&self, id: &str) -> EngineStatus {
@@ -230,7 +240,10 @@ impl Engines {
     /// usable). Replacing a Damaged install waits for running conversions to end.
     pub fn ensure(&self, id: &str, progress: &mut dyn FnMut(f32)) -> Result<(), String> {
         let entry = self.entry(id)?.clone();
-        if matches!(install::read_status(&entry, &self.root), EngineStatus::Installed { .. }) {
+        if matches!(
+            install::read_status(&entry, &self.root),
+            EngineStatus::Installed { .. }
+        ) {
             return Ok(());
         }
         let _x = self.leases.exclusive(id, true)?;
@@ -244,7 +257,10 @@ impl Engines {
         let _x = match self.leases.exclusive(id, false) {
             Ok(x) => x,
             Err(e) => {
-                self.emit(EngineEvent::Failed { id: id.to_string(), error: e.clone() });
+                self.emit(EngineEvent::Failed {
+                    id: id.to_string(),
+                    error: e.clone(),
+                });
                 return Err(e);
             }
         };
@@ -252,13 +268,20 @@ impl Engines {
     }
 
     /// The caller holds exclusive access to the engine.
-    fn install_locked(&self, entry: &EngineEntry, force: bool, progress: &mut dyn FnMut(f32)) -> Result<(), String> {
+    fn install_locked(
+        &self,
+        entry: &EngineEntry,
+        force: bool,
+        progress: &mut dyn FnMut(f32),
+    ) -> Result<(), String> {
         let id = entry.id.as_str();
         let current = install::read_status(entry, &self.root);
         // ensure(): anything usable is enough. install() (Library): skip only when the
         // manifest version is already installed and healthy, e.g. Download clicked twice.
         let skip = match current {
-            EngineStatus::Installed { update_available, .. } => !force || !update_available,
+            EngineStatus::Installed {
+                update_available, ..
+            } => !force || !update_available,
             _ => false,
         };
         if skip {
@@ -275,14 +298,22 @@ impl Engines {
         let clear = Clear(&self.installing, id);
         let hook: &PostUnpack<'static> = &magick_post_unpack;
         let magick = entry.capabilities.as_deref() == Some("magick_formats");
-        let ctx = InstallCtx { root: &self.root, sevenzip: &self.sevenzip, fetcher: &*self.fetcher, post_unpack: magick.then_some(hook) };
+        let ctx = InstallCtx {
+            root: &self.root,
+            sevenzip: &self.sevenzip,
+            fetcher: &*self.fetcher,
+            post_unpack: magick.then_some(hook),
+        };
         let mut last = Instant::now() - Duration::from_secs(1);
         let res = install::install(entry, &ctx, &mut |p| {
             lock(&self.installing).insert(id.to_string(), p);
             progress(p);
             if last.elapsed() >= Duration::from_millis(150) || p >= 1.0 {
                 last = Instant::now();
-                self.emit(EngineEvent::Progress { id: id.to_string(), pct: p });
+                self.emit(EngineEvent::Progress {
+                    id: id.to_string(),
+                    pct: p,
+                });
             }
         })
         .map(|_| ());
@@ -291,7 +322,10 @@ impl Engines {
             Ok(()) => self.emit(EngineEvent::Done { id: id.to_string() }),
             Err(e) => {
                 log::warn!("engine {id} install failed: {e}");
-                self.emit(EngineEvent::Failed { id: id.to_string(), error: e.clone() });
+                self.emit(EngineEvent::Failed {
+                    id: id.to_string(),
+                    error: e.clone(),
+                });
             }
         }
         res
@@ -323,19 +357,35 @@ impl Engines {
 /// Environment for running ImageMagick: read policy.xml from the exe's own folder.
 pub fn magick_env(magick: &Path) -> Vec<(OsString, OsString)> {
     let dir = magick.parent().unwrap_or(Path::new("."));
-    vec![(OsString::from("MAGICK_CONFIGURE_PATH"), dir.as_os_str().to_owned())]
+    vec![(
+        OsString::from("MAGICK_CONFIGURE_PATH"),
+        dir.as_os_str().to_owned(),
+    )]
 }
 
 /// Runs on the staging folder before it is renamed into place: the policy and the
 /// capability list are part of the install, so a failure here installs nothing.
-fn magick_post_unpack(_entry: &EngineEntry, staging: &Path, rec: &InstallRecord) -> Result<(), String> {
+fn magick_post_unpack(
+    _entry: &EngineEntry,
+    staging: &Path,
+    rec: &InstallRecord,
+) -> Result<(), String> {
     let magick = staging.join(&rec.bins.get("magick").ok_or("magick.exe missing")?.rel);
     let dir = magick.parent().unwrap_or(staging);
     write_magick_policy(dir).map_err(|e| format!("couldn't write ImageMagick's policy: {e}"))?;
-    let out = crate::proc::run_capture_env(&magick, ["-list", "format"], &magick_env(&magick), Duration::from_secs(30))
-        .ok_or("`magick -list format` failed")?;
+    let out = crate::proc::run_capture_env(
+        &magick,
+        ["-list", "format"],
+        &magick_env(&magick),
+        Duration::from_secs(30),
+    )
+    .ok_or("`magick -list format` failed")?;
     let caps = caps::parse_magick_formats(&out);
-    std::fs::write(staging.join(install::CAPS), serde_json::to_vec(&caps).unwrap()).map_err(|e| e.to_string())
+    std::fs::write(
+        staging.join(install::CAPS),
+        serde_json::to_vec(&caps).unwrap(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Restrictive ImageMagick policy: no delegates, no network/script coders, no `@file`
@@ -358,8 +408,8 @@ pub fn write_magick_policy(dir: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::install::tests::{entry, make_archive, sevenzip};
     use super::install::LocalFetcher;
+    use super::install::tests::{entry, make_archive, sevenzip};
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -369,7 +419,9 @@ mod tests {
         std::fs::write(d.path().join("policy.xml"), "shipped").unwrap();
         write_magick_policy(d.path()).unwrap();
         let t = std::fs::read_to_string(d.path().join("policy.xml")).unwrap();
-        assert!(t.contains(r#"pattern="{URL,HTTP,HTTPS,FTP,MVG,MSL,SVG,MSVG,TEXT,EPHEMERAL,SHOW,WIN,PLASMA}""#));
+        assert!(t.contains(
+            r#"pattern="{URL,HTTP,HTTPS,FTP,MVG,MSL,SVG,MSVG,TEXT,EPHEMERAL,SHOW,WIN,PLASMA}""#
+        ));
         for limit in [
             r#"name="memory" value="1GiB""#,
             r#"name="map" value="2GiB""#,
@@ -386,12 +438,24 @@ mod tests {
     #[test]
     fn magick_env_points_at_the_exe_folder() {
         let env = magick_env(Path::new(r"C:\e\imagemagick\7.1\magick.exe"));
-        assert_eq!(env, [(OsString::from("MAGICK_CONFIGURE_PATH"), OsString::from(r"C:\e\imagemagick\7.1"))]);
+        assert_eq!(
+            env,
+            [(
+                OsString::from("MAGICK_CONFIGURE_PATH"),
+                OsString::from(r"C:\e\imagemagick\7.1")
+            )]
+        );
     }
 
     struct Counting(LocalFetcher, Arc<AtomicUsize>);
     impl Fetcher for Counting {
-        fn fetch(&self, url: &str, dest: &Path, max: u64, p: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String> {
+        fn fetch(
+            &self,
+            url: &str,
+            dest: &Path,
+            max: u64,
+            p: &mut dyn FnMut(u64, Option<u64>),
+        ) -> Result<(), String> {
             self.1.fetch_add(1, Ordering::SeqCst);
             std::thread::sleep(Duration::from_millis(200));
             self.0.fetch(url, dest, max, p)
@@ -402,27 +466,58 @@ mod tests {
     fn concurrent_ensure_downloads_once_and_reports_events() {
         let d = tempfile::tempdir().unwrap();
         let zip = make_archive(d.path());
-        let manifest = Manifest { engines: vec![entry(&zip, "1.0")] };
+        let manifest = Manifest {
+            engines: vec![entry(&zip, "1.0")],
+        };
         let count = Arc::new(AtomicUsize::new(0));
-        let engines = Arc::new(Engines::new(manifest, d.path().join("engines"), sevenzip(), Box::new(Counting(LocalFetcher { source: zip }, count.clone()))));
+        let engines = Arc::new(Engines::new(
+            manifest,
+            d.path().join("engines"),
+            sevenzip(),
+            Box::new(Counting(LocalFetcher { source: zip }, count.clone())),
+        ));
         let events = Arc::new(Mutex::new(Vec::new()));
         let ev2 = events.clone();
         engines.set_listener(Arc::new(move |e| ev2.lock().unwrap().push(e)));
-        let a = { let e = engines.clone(); std::thread::spawn(move || e.ensure("tool", &mut |_| {})) };
-        let b = { let e = engines.clone(); std::thread::spawn(move || e.ensure("tool", &mut |_| {})) };
+        let a = {
+            let e = engines.clone();
+            std::thread::spawn(move || e.ensure("tool", &mut |_| {}))
+        };
+        let b = {
+            let e = engines.clone();
+            std::thread::spawn(move || e.ensure("tool", &mut |_| {}))
+        };
         a.join().unwrap().unwrap();
         b.join().unwrap().unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 1);
         assert!(engines.is_ready("tool"));
         assert!(engines.bin("tool", "tool").unwrap().is_file());
-        assert!(events.lock().unwrap().contains(&EngineEvent::Done { id: "tool".into() }));
-        assert_eq!(engines.list()[0].status, EngineStatus::Installed { version: "1.0".into(), update_available: false });
+        assert!(
+            events
+                .lock()
+                .unwrap()
+                .contains(&EngineEvent::Done { id: "tool".into() })
+        );
+        assert_eq!(
+            engines.list()[0].status,
+            EngineStatus::Installed {
+                version: "1.0".into(),
+                update_available: false
+            }
+        );
     }
 
     fn installed_tool(d: &Path) -> Engines {
         let zip = make_archive(d);
-        let manifest = Manifest { engines: vec![entry(&zip, "1.0")] };
-        let engines = Engines::new(manifest, d.join("engines"), sevenzip(), Box::new(LocalFetcher { source: zip }));
+        let manifest = Manifest {
+            engines: vec![entry(&zip, "1.0")],
+        };
+        let engines = Engines::new(
+            manifest,
+            d.join("engines"),
+            sevenzip(),
+            Box::new(LocalFetcher { source: zip }),
+        );
         engines.ensure("tool", &mut |_| {}).unwrap();
         engines
     }
@@ -434,7 +529,10 @@ mod tests {
         let lease = engines.acquire("tool");
         assert!(engines.in_use("tool"));
         assert_eq!(engines.remove("tool").unwrap_err(), ENGINE_BUSY);
-        assert_eq!(engines.install("tool", &mut |_| {}).unwrap_err(), ENGINE_BUSY);
+        assert_eq!(
+            engines.install("tool", &mut |_| {}).unwrap_err(),
+            ENGINE_BUSY
+        );
         assert!(engines.is_ready("tool"));
         drop(lease);
         assert!(!engines.in_use("tool"));
@@ -464,7 +562,10 @@ mod tests {
         let e2 = engines.clone();
         let repair = std::thread::spawn(move || e2.ensure("tool", &mut |_| {}));
         std::thread::sleep(Duration::from_millis(300));
-        assert!(!repair.is_finished(), "ensure must wait while a conversion holds the engine");
+        assert!(
+            !repair.is_finished(),
+            "ensure must wait while a conversion holds the engine"
+        );
         drop(lease);
         repair.join().unwrap().unwrap();
         assert!(engines.is_ready("tool"));

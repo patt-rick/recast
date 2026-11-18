@@ -18,16 +18,25 @@ pub fn shrink_video_kbps(target_mb: u32, duration_s: f64, has_audio: bool) -> Re
 
 /// Rough output size (spec §7): Shrink = target; WAV/AIFF ≈ 176 kB/s;
 /// PDF → images ≈ 1 MB/page; otherwise ≈ the input size.
-pub fn estimate_bytes(preset: &Preset, inputs_size: u64, duration_s: Option<f64>, pages: Option<u32>, target_mb: u32) -> u64 {
+pub fn estimate_bytes(
+    preset: &Preset,
+    inputs_size: u64,
+    duration_s: Option<f64>,
+    pages: Option<u32>,
+    target_mb: u32,
+) -> u64 {
     if preset.uses("video_kbps") {
         return target_mb as u64 * MB;
     }
     if matches!(preset.out_ext.as_str(), "wav" | "aiff")
-        && let Some(d) = duration_s {
-            return (d * 176_400.0) as u64;
-        }
+        && let Some(d) = duration_s
+    {
+        return (d * 176_400.0) as u64;
+    }
     if preset.engine == "ghostscript" && preset.out_naming.is_folder() {
-        return pages.map(|p| p as u64 * MB).unwrap_or(inputs_size.saturating_mul(10));
+        return pages
+            .map(|p| p as u64 * MB)
+            .unwrap_or(inputs_size.saturating_mul(10));
     }
     inputs_size
 }
@@ -39,7 +48,7 @@ pub fn required_free(estimate: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presets::{Catalog, BUNDLED};
+    use crate::presets::{BUNDLED, Catalog};
 
     #[test]
     fn shrink_bitrate() {
@@ -52,10 +61,28 @@ mod tests {
     #[test]
     fn estimates() {
         let c = Catalog::parse(BUNDLED).unwrap();
-        assert_eq!(estimate_bytes(c.get("video-shrink").unwrap(), 900 * MB, Some(60.0), None, 25), 25 * MB);
-        assert_eq!(estimate_bytes(c.get("video-wav").unwrap(), MB, Some(10.0), None, 25), 1_764_000);
-        assert_eq!(estimate_bytes(c.get("pdf-images").unwrap(), MB, None, Some(30), 25), 30 * MB);
-        assert_eq!(estimate_bytes(c.get("video-mp4").unwrap(), 7 * MB, None, None, 25), 7 * MB);
+        assert_eq!(
+            estimate_bytes(
+                c.get("video-shrink").unwrap(),
+                900 * MB,
+                Some(60.0),
+                None,
+                25
+            ),
+            25 * MB
+        );
+        assert_eq!(
+            estimate_bytes(c.get("video-wav").unwrap(), MB, Some(10.0), None, 25),
+            1_764_000
+        );
+        assert_eq!(
+            estimate_bytes(c.get("pdf-images").unwrap(), MB, None, Some(30), 25),
+            30 * MB
+        );
+        assert_eq!(
+            estimate_bytes(c.get("video-mp4").unwrap(), 7 * MB, None, None, 25),
+            7 * MB
+        );
         assert_eq!(required_free(MB), 50 * MB);
         assert_eq!(required_f(100), 120);
     }

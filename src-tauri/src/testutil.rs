@@ -9,6 +9,10 @@ pub fn fake_engine() -> PathBuf {
         p.pop();
     }
     let exe = p.join("examples").join("fake_engine.exe");
-    assert!(exe.exists(), "{} is missing: run plain `cargo test` (it builds examples)", exe.display());
+    assert!(
+        exe.exists(),
+        "{} is missing: run plain `cargo test` (it builds examples)",
+        exe.display()
+    );
     exe
 }

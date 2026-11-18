@@ -37,14 +37,22 @@ fn drain<R: Read + Send + 'static>(r: Option<R>) -> Option<JoinHandle<Vec<u8>>> 
 
 /// Run `program args…` inside a kill group with extra environment variables,
 /// draining both pipes; the whole tree is killed after `timeout`.
-pub fn run_full<I, S>(program: &Path, args: I, env: &[(OsString, OsString)], timeout: Duration) -> io::Result<Captured>
+pub fn run_full<I, S>(
+    program: &Path,
+    args: I,
+    env: &[(OsString, OsString)],
+    timeout: Duration,
+) -> io::Result<Captured>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
     let group = platform::KillGroup::new()?;
     let mut cmd = Command::new(program);
-    cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -65,9 +73,17 @@ where
     };
     group.kill();
     let deadline = Instant::now() + Duration::from_secs(2);
-    let stdout = out.and_then(|h| join_until(h, deadline)).unwrap_or_default();
-    let stderr = err.and_then(|h| join_until(h, deadline)).unwrap_or_default();
-    Ok(Captured { status, stdout, stderr })
+    let stdout = out
+        .and_then(|h| join_until(h, deadline))
+        .unwrap_or_default();
+    let stderr = err
+        .and_then(|h| join_until(h, deadline))
+        .unwrap_or_default();
+    Ok(Captured {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 /// Run `program args…`; return stdout if it exits 0 within `timeout`, else None.
@@ -80,7 +96,12 @@ where
 }
 
 /// `run_capture` with extra environment variables.
-pub fn run_capture_env<I, S>(program: &Path, args: I, env: &[(OsString, OsString)], timeout: Duration) -> Option<String>
+pub fn run_capture_env<I, S>(
+    program: &Path,
+    args: I,
+    env: &[(OsString, OsString)],
+    timeout: Duration,
+) -> Option<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -98,21 +119,39 @@ mod tests {
 
     #[test]
     fn captures_stdout() {
-        let out = run_capture(Path::new("cmd"), ["/c", "echo hello"], Duration::from_secs(10)).unwrap();
+        let out = run_capture(
+            Path::new("cmd"),
+            ["/c", "echo hello"],
+            Duration::from_secs(10),
+        )
+        .unwrap();
         assert_eq!(out.trim(), "hello");
     }
 
     #[test]
     fn passes_environment() {
         let env = [(OsString::from("RECAST_TEST_VAR"), OsString::from("xyz"))];
-        let out = run_capture_env(Path::new("cmd"), ["/c", "echo %RECAST_TEST_VAR%"], &env, Duration::from_secs(10)).unwrap();
+        let out = run_capture_env(
+            Path::new("cmd"),
+            ["/c", "echo %RECAST_TEST_VAR%"],
+            &env,
+            Duration::from_secs(10),
+        )
+        .unwrap();
         assert_eq!(out.trim(), "xyz");
     }
 
     #[test]
     fn times_out() {
         let t = Instant::now();
-        assert!(run_capture(Path::new("ping"), ["-n", "20", "127.0.0.1"], Duration::from_millis(300)).is_none());
+        assert!(
+            run_capture(
+                Path::new("ping"),
+                ["-n", "20", "127.0.0.1"],
+                Duration::from_millis(300)
+            )
+            .is_none()
+        );
         assert!(t.elapsed() < Duration::from_secs(5));
     }
 
@@ -123,7 +162,13 @@ mod tests {
 
     #[test]
     fn captures_stderr_and_status() {
-        let c = run_full(Path::new("cmd"), ["/c", "echo oops 1>&2 & exit 4"], &[], Duration::from_secs(10)).unwrap();
+        let c = run_full(
+            Path::new("cmd"),
+            ["/c", "echo oops 1>&2 & exit 4"],
+            &[],
+            Duration::from_secs(10),
+        )
+        .unwrap();
         assert_eq!(c.status.unwrap().code(), Some(4));
         assert!(String::from_utf8_lossy(&c.stderr).contains("oops"));
     }

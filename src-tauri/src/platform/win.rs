@@ -5,24 +5,24 @@ use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::process::Child;
 
-use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, STILL_ACTIVE};
 use windows::Win32::Storage::FileSystem::{
-    GetDiskFreeSpaceExW, GetFileAttributesW, MoveFileExW, SetFileAttributesW,
-    FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, INVALID_FILE_ATTRIBUTES, MOVE_FILE_FLAGS,
-};
-use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetDiskFreeSpaceExW, GetFileAttributesW,
+    INVALID_FILE_ATTRIBUTES, MOVE_FILE_FLAGS, MoveFileExW, SetFileAttributesW,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
-    CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
+    CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+};
+use windows::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, TerminateJobObject,
 };
 use windows::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, OpenThread, ResumeThread, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, ResumeThread,
     THREAD_SUSPEND_RESUME,
 };
+use windows::core::PCWSTR;
 
 /// `CREATE_NO_WINDOW`: engine consoles never flash on screen.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -33,11 +33,18 @@ pub const CREATE_SUSPENDED: u32 = 0x0000_0004;
 /// (or `\?\UNC\`) prefix so these Win32 calls work past MAX_PATH.
 fn wide(p: &Path) -> Vec<u16> {
     const BS: u16 = b'\\' as u16;
-    let raw: Vec<u16> = p.as_os_str().encode_wide().map(|c| if c == b'/' as u16 { BS } else { c }).collect();
+    let raw: Vec<u16> = p
+        .as_os_str()
+        .encode_wide()
+        .map(|c| if c == b'/' as u16 { BS } else { c })
+        .collect();
     let verbatim = raw.starts_with(&[BS, BS, b'?' as u16, BS]);
     let mut out: Vec<u16> = if raw.len() >= 248 && !verbatim && p.is_absolute() {
         if raw.starts_with(&[BS, BS]) {
-            r"\\?\UNC".encode_utf16().chain(raw[1..].iter().copied()).collect()
+            r"\\?\UNC"
+                .encode_utf16()
+                .chain(raw[1..].iter().copied())
+                .collect()
         } else {
             r"\\?\".encode_utf16().chain(raw.iter().copied()).collect()
         }
@@ -74,7 +81,9 @@ impl KillGroup {
                 let _ = CloseHandle(job);
                 return Err(to_io(e));
             }
-            Ok(Self { raw: job.0 as usize })
+            Ok(Self {
+                raw: job.0 as usize,
+            })
         }
     }
 
@@ -84,7 +93,9 @@ impl KillGroup {
 
     /// Prefer `spawn_contained`, which assigns before the process runs any code.
     pub fn assign(&self, child: &Child) -> io::Result<()> {
-        unsafe { AssignProcessToJobObject(self.handle(), HANDLE(child.as_raw_handle())).map_err(to_io) }
+        unsafe {
+            AssignProcessToJobObject(self.handle(), HANDLE(child.as_raw_handle())).map_err(to_io)
+        }
     }
 
     pub fn kill(&self) {
@@ -106,8 +117,12 @@ impl Drop for KillGroup {
 /// no child it starts can escape the group. Overrides any creation flags on `cmd`.
 pub fn spawn_contained(cmd: &mut std::process::Command, group: &KillGroup) -> io::Result<Child> {
     use std::os::windows::process::CommandExt;
-    let mut child = cmd.creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED).spawn()?;
-    let started = group.assign(&child).and_then(|()| resume_process_main_thread(child.id()));
+    let mut child = cmd
+        .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED)
+        .spawn()?;
+    let started = group
+        .assign(&child)
+        .and_then(|()| resume_process_main_thread(child.id()));
     if let Err(e) = started {
         let _ = child.kill();
         let _ = child.wait();
@@ -121,19 +136,27 @@ pub fn spawn_contained(cmd: &mut std::process::Command, group: &KillGroup) -> io
 pub fn resume_process_main_thread(pid: u32) -> io::Result<()> {
     unsafe {
         let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0).map_err(to_io)?;
-        let mut entry = THREADENTRY32 { dwSize: std::mem::size_of::<THREADENTRY32>() as u32, ..Default::default() };
+        let mut entry = THREADENTRY32 {
+            dwSize: std::mem::size_of::<THREADENTRY32>() as u32,
+            ..Default::default()
+        };
         let mut resumed = false;
         let mut more = Thread32First(snap, &mut entry).is_ok();
         while more {
             if entry.th32OwnerProcessID == pid
-                && let Ok(t) = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID) {
-                    resumed |= ResumeThread(t) != u32::MAX;
-                    let _ = CloseHandle(t);
-                }
+                && let Ok(t) = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID)
+            {
+                resumed |= ResumeThread(t) != u32::MAX;
+                let _ = CloseHandle(t);
+            }
             more = Thread32Next(snap, &mut entry).is_ok();
         }
         let _ = CloseHandle(snap);
-        if resumed { Ok(()) } else { Err(io::Error::other(format!("couldn't resume process {pid}"))) }
+        if resumed {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!("couldn't resume process {pid}")))
+        }
     }
 }
 
@@ -141,7 +164,9 @@ pub fn resume_process_main_thread(pid: u32) -> io::Result<()> {
 pub fn free_space(path: &Path) -> Option<u64> {
     let w = wide(path);
     let mut avail = 0u64;
-    unsafe { GetDiskFreeSpaceExW(PCWSTR(w.as_ptr()), Some(&mut avail as *mut u64), None, None).ok()? };
+    unsafe {
+        GetDiskFreeSpaceExW(PCWSTR(w.as_ptr()), Some(&mut avail as *mut u64), None, None).ok()?
+    };
     Some(avail)
 }
 
@@ -152,8 +177,11 @@ pub fn set_hidden(path: &Path) -> io::Result<()> {
         if attrs == INVALID_FILE_ATTRIBUTES {
             return Err(io::Error::last_os_error());
         }
-        SetFileAttributesW(PCWSTR(w.as_ptr()), FILE_FLAGS_AND_ATTRIBUTES(attrs | FILE_ATTRIBUTE_HIDDEN.0))
-            .map_err(to_io)
+        SetFileAttributesW(
+            PCWSTR(w.as_ptr()),
+            FILE_FLAGS_AND_ATTRIBUTES(attrs | FILE_ATTRIBUTE_HIDDEN.0),
+        )
+        .map_err(to_io)
     }
 }
 
@@ -222,9 +250,25 @@ mod tests {
     #[test]
     fn spawn_contained_runs_the_process_inside_the_group() {
         let group = KillGroup::new().unwrap();
-        let mut child = spawn_contained(Command::new("cmd").args(["/c", "exit 7"]).stdout(Stdio::null()), &group).unwrap();
-        assert_eq!(child.wait().unwrap().code(), Some(7), "the suspended main thread was resumed");
-        let mut hung = spawn_contained(Command::new("ping").args(["-n", "30", "127.0.0.1"]).stdout(Stdio::null()), &group).unwrap();
+        let mut child = spawn_contained(
+            Command::new("cmd")
+                .args(["/c", "exit 7"])
+                .stdout(Stdio::null()),
+            &group,
+        )
+        .unwrap();
+        assert_eq!(
+            child.wait().unwrap().code(),
+            Some(7),
+            "the suspended main thread was resumed"
+        );
+        let mut hung = spawn_contained(
+            Command::new("ping")
+                .args(["-n", "30", "127.0.0.1"])
+                .stdout(Stdio::null()),
+            &group,
+        )
+        .unwrap();
         group.kill();
         assert!(!hung.wait().unwrap().success());
     }

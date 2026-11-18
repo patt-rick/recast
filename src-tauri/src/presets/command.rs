@@ -17,7 +17,13 @@ pub struct BuildInput<'a> {
     pub vars: &'a BTreeMap<String, String>,
 }
 
-const FFMPEG_PREFIX: &[&str] = &["-hide_banner", "-nostdin", "-progress", "pipe:1", "-nostats"];
+const FFMPEG_PREFIX: &[&str] = &[
+    "-hide_banner",
+    "-nostdin",
+    "-progress",
+    "pipe:1",
+    "-nostats",
+];
 
 pub fn expand(template: &str, values: &BTreeMap<String, String>) -> Result<String, String> {
     let mut out = String::new();
@@ -25,9 +31,15 @@ pub fn expand(template: &str, values: &BTreeMap<String, String>) -> Result<Strin
     while let Some(start) = rest.find('{') {
         out.push_str(&rest[..start]);
         let after = &rest[start + 1..];
-        let end = after.find('}').ok_or_else(|| format!("unclosed placeholder in '{template}'"))?;
+        let end = after
+            .find('}')
+            .ok_or_else(|| format!("unclosed placeholder in '{template}'"))?;
         let key = &after[..end];
-        out.push_str(values.get(key).ok_or_else(|| format!("unknown placeholder {{{key}}}"))?);
+        out.push_str(
+            values
+                .get(key)
+                .ok_or_else(|| format!("unknown placeholder {{{key}}}"))?,
+        );
         rest = &after[end + 1..];
     }
     out.push_str(rest);
@@ -35,7 +47,9 @@ pub fn expand(template: &str, values: &BTreeMap<String, String>) -> Result<Strin
 }
 
 fn path_str(p: &Path) -> Result<String, String> {
-    let s = p.to_str().ok_or_else(|| format!("path is not valid Unicode: {}", p.display()))?;
+    let s = p
+        .to_str()
+        .ok_or_else(|| format!("path is not valid Unicode: {}", p.display()))?;
     if s.starts_with('-') {
         return Err(format!("input path starts with '-': {s}"));
     }
@@ -49,7 +63,11 @@ pub fn build_command(preset: &Preset, b: &BuildInput) -> Result<Vec<Vec<OsString
     values.insert("in_dir".into(), path_str(b.in_dir)?);
     values.insert("out".into(), format!("out.{}", b.out_ext));
     values.insert("out_dir".into(), "out".into());
-    let inputs: Vec<String> = b.inputs.iter().map(|p| path_str(p)).collect::<Result<_, _>>()?;
+    let inputs: Vec<String> = b
+        .inputs
+        .iter()
+        .map(|p| path_str(p))
+        .collect::<Result<_, _>>()?;
 
     let mut passes = Vec::new();
     for template in &preset.passes {
@@ -76,7 +94,7 @@ pub fn build_command(preset: &Preset, b: &BuildInput) -> Result<Vec<Vec<OsString
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presets::{tests::MINI, Catalog};
+    use crate::presets::{Catalog, tests::MINI};
     use std::path::PathBuf;
 
     fn vars() -> BTreeMap<String, String> {
@@ -92,20 +110,62 @@ mod tests {
         let c = Catalog::parse(MINI).unwrap();
         let inputs = vec![PathBuf::from(r"C:\in\café 日本 %[1] -x.mov")];
         let v = vars();
-        let passes = build_command(c.get("v-mp3").unwrap(), &BuildInput { inputs: &inputs, in_dir: Path::new(r"C:\in"), out_ext: "mp3", vars: &v }).unwrap();
+        let passes = build_command(
+            c.get("v-mp3").unwrap(),
+            &BuildInput {
+                inputs: &inputs,
+                in_dir: Path::new(r"C:\in"),
+                out_ext: "mp3",
+                vars: &v,
+            },
+        )
+        .unwrap();
         assert_eq!(
             argv(&passes[0]),
-            ["-hide_banner", "-nostdin", "-progress", "pipe:1", "-nostats", "-i", r"C:\in\café 日本 %[1] -x.mov", "-b:a", "192k", "out.mp3"]
+            [
+                "-hide_banner",
+                "-nostdin",
+                "-progress",
+                "pipe:1",
+                "-nostats",
+                "-i",
+                r"C:\in\café 日本 %[1] -x.mov",
+                "-b:a",
+                "192k",
+                "out.mp3"
+            ]
         );
     }
 
     #[test]
     fn inputs_expand_to_one_arg_each() {
         let c = Catalog::parse(MINI).unwrap();
-        let inputs = vec![PathBuf::from(r"C:\in\a.pdf"), PathBuf::from(r"C:\in\b c.pdf")];
+        let inputs = vec![
+            PathBuf::from(r"C:\in\a.pdf"),
+            PathBuf::from(r"C:\in\b c.pdf"),
+        ];
         let v = vars();
-        let passes = build_command(c.get("pdf-merge").unwrap(), &BuildInput { inputs: &inputs, in_dir: Path::new(r"C:\in"), out_ext: "pdf", vars: &v }).unwrap();
-        assert_eq!(argv(&passes[0]), ["--empty", "--pages", r"C:\in\a.pdf", r"C:\in\b c.pdf", "--", "out.pdf"]);
+        let passes = build_command(
+            c.get("pdf-merge").unwrap(),
+            &BuildInput {
+                inputs: &inputs,
+                in_dir: Path::new(r"C:\in"),
+                out_ext: "pdf",
+                vars: &v,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            argv(&passes[0]),
+            [
+                "--empty",
+                "--pages",
+                r"C:\in\a.pdf",
+                r"C:\in\b c.pdf",
+                "--",
+                "out.pdf"
+            ]
+        );
     }
 
     #[test]
@@ -113,7 +173,16 @@ mod tests {
         let c = Catalog::parse(MINI).unwrap();
         let inputs = vec![PathBuf::from("-rf.mov")];
         let v = vars();
-        let err = build_command(c.get("v-mp3").unwrap(), &BuildInput { inputs: &inputs, in_dir: Path::new(r"C:\in"), out_ext: "mp3", vars: &v }).unwrap_err();
+        let err = build_command(
+            c.get("v-mp3").unwrap(),
+            &BuildInput {
+                inputs: &inputs,
+                in_dir: Path::new(r"C:\in"),
+                out_ext: "mp3",
+                vars: &v,
+            },
+        )
+        .unwrap_err();
         assert!(err.contains("starts with '-'"), "{err}");
     }
 
@@ -121,7 +190,11 @@ mod tests {
     fn unknown_placeholder_is_an_error() {
         let mut values = BTreeMap::new();
         values.insert("in".to_string(), "x".to_string());
-        assert!(expand("{in}{nope}", &values).unwrap_err().contains("{nope}"));
+        assert!(
+            expand("{in}{nope}", &values)
+                .unwrap_err()
+                .contains("{nope}")
+        );
         assert_eq!(expand("{in}[0]", &values).unwrap(), "x[0]");
     }
 }

@@ -21,9 +21,17 @@ pub struct Settings {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Triggers { pub edge_handle: bool, pub edge: String, pub edge_pos: f64, pub desk_pad: bool, pub shake: bool }
+pub struct Triggers {
+    pub edge_handle: bool,
+    pub edge: String,
+    pub edge_pos: f64,
+    pub desk_pad: bool,
+    pub shake: bool,
+}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Shell { pub explorer_entry: bool }
+pub struct Shell {
+    pub explorer_entry: bool,
+}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Output {
     /// "next_to_original" | "folder"
@@ -33,28 +41,78 @@ pub struct Output {
     pub fallback_folder: String,
 }
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Quality { pub mp3_kbps: u32, pub aac_kbps: u32, pub jpg_q: u32, pub webp_q: u32, pub avif_q: u32 }
+pub struct Quality {
+    pub mp3_kbps: u32,
+    pub aac_kbps: u32,
+    pub jpg_q: u32,
+    pub webp_q: u32,
+    pub avif_q: u32,
+}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Gif { pub fps: u32, pub width: u32 }
+pub struct Gif {
+    pub fps: u32,
+    pub width: u32,
+}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Shrink { pub target_mb: u32, pub image_px: u32 }
+pub struct Shrink {
+    pub target_mb: u32,
+    pub image_px: u32,
+}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Jobs { pub concurrency: u32, pub stall_timeout_s: u32, pub no_progress_cap_min: u32 }
+pub struct Jobs {
+    pub concurrency: u32,
+    pub stall_timeout_s: u32,
+    pub no_progress_cap_min: u32,
+}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct App { pub start_with_windows: bool, pub first_run_done: bool }
+pub struct App {
+    pub start_with_windows: bool,
+    pub first_run_done: bool,
+}
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             version: CURRENT_VERSION,
-            triggers: Triggers { edge_handle: true, edge: "left".into(), edge_pos: 0.5, desk_pad: false, shake: true },
-            shell: Shell { explorer_entry: true },
-            output: Output { location: "next_to_original".into(), folder: String::new(), fallback_folder: String::new() },
-            quality: Quality { mp3_kbps: 192, aac_kbps: 192, jpg_q: 85, webp_q: 82, avif_q: 60 },
-            gif: Gif { fps: 12, width: 480 },
-            shrink: Shrink { target_mb: 25, image_px: 2048 },
-            jobs: Jobs { concurrency: 2, stall_timeout_s: 60, no_progress_cap_min: 10 },
-            app: App { start_with_windows: true, first_run_done: false },
+            triggers: Triggers {
+                edge_handle: true,
+                edge: "left".into(),
+                edge_pos: 0.5,
+                desk_pad: false,
+                shake: true,
+            },
+            shell: Shell {
+                explorer_entry: true,
+            },
+            output: Output {
+                location: "next_to_original".into(),
+                folder: String::new(),
+                fallback_folder: String::new(),
+            },
+            quality: Quality {
+                mp3_kbps: 192,
+                aac_kbps: 192,
+                jpg_q: 85,
+                webp_q: 82,
+                avif_q: 60,
+            },
+            gif: Gif {
+                fps: 12,
+                width: 480,
+            },
+            shrink: Shrink {
+                target_mb: 25,
+                image_px: 2048,
+            },
+            jobs: Jobs {
+                concurrency: 2,
+                stall_timeout_s: 60,
+                no_progress_cap_min: 10,
+            },
+            app: App {
+                start_with_windows: true,
+                first_run_done: false,
+            },
         }
     }
 }
@@ -63,13 +121,19 @@ impl Settings {
     /// Every leaf as `setting.<path>` → string, for preset placeholders.
     pub fn to_vars(&self) -> BTreeMap<String, String> {
         let mut m = BTreeMap::new();
-        flatten("setting", &serde_json::to_value(self).expect("settings serialize"), &mut m);
+        flatten(
+            "setting",
+            &serde_json::to_value(self).expect("settings serialize"),
+            &mut m,
+        );
         m
     }
 
     pub fn fallback_dir(&self) -> PathBuf {
         if self.output.fallback_folder.trim().is_empty() {
-            dirs::document_dir().unwrap_or_else(std::env::temp_dir).join("Recast")
+            dirs::document_dir()
+                .unwrap_or_else(std::env::temp_dir)
+                .join("Recast")
         } else {
             PathBuf::from(&self.output.fallback_folder)
         }
@@ -85,19 +149,79 @@ impl Settings {
                 }
             };
         }
-        range!(self.quality.mp3_kbps, d.quality.mp3_kbps, 32, 320, "quality.mp3_kbps");
-        range!(self.quality.aac_kbps, d.quality.aac_kbps, 32, 320, "quality.aac_kbps");
+        range!(
+            self.quality.mp3_kbps,
+            d.quality.mp3_kbps,
+            32,
+            320,
+            "quality.mp3_kbps"
+        );
+        range!(
+            self.quality.aac_kbps,
+            d.quality.aac_kbps,
+            32,
+            320,
+            "quality.aac_kbps"
+        );
         range!(self.quality.jpg_q, d.quality.jpg_q, 1, 100, "quality.jpg_q");
-        range!(self.quality.webp_q, d.quality.webp_q, 1, 100, "quality.webp_q");
-        range!(self.quality.avif_q, d.quality.avif_q, 1, 100, "quality.avif_q");
+        range!(
+            self.quality.webp_q,
+            d.quality.webp_q,
+            1,
+            100,
+            "quality.webp_q"
+        );
+        range!(
+            self.quality.avif_q,
+            d.quality.avif_q,
+            1,
+            100,
+            "quality.avif_q"
+        );
         range!(self.gif.fps, d.gif.fps, 1, 50, "gif.fps");
         range!(self.gif.width, d.gif.width, 16, 4096, "gif.width");
-        range!(self.shrink.target_mb, d.shrink.target_mb, 1, 100_000, "shrink.target_mb");
-        range!(self.shrink.image_px, d.shrink.image_px, 16, 16_384, "shrink.image_px");
-        range!(self.jobs.concurrency, d.jobs.concurrency, 1, 4, "jobs.concurrency");
-        range!(self.jobs.stall_timeout_s, d.jobs.stall_timeout_s, 10, 3600, "jobs.stall_timeout_s");
-        range!(self.jobs.no_progress_cap_min, d.jobs.no_progress_cap_min, 1, 240, "jobs.no_progress_cap_min");
-        range!(self.triggers.edge_pos, d.triggers.edge_pos, 0.0, 1.0, "triggers.edge_pos");
+        range!(
+            self.shrink.target_mb,
+            d.shrink.target_mb,
+            1,
+            100_000,
+            "shrink.target_mb"
+        );
+        range!(
+            self.shrink.image_px,
+            d.shrink.image_px,
+            16,
+            16_384,
+            "shrink.image_px"
+        );
+        range!(
+            self.jobs.concurrency,
+            d.jobs.concurrency,
+            1,
+            4,
+            "jobs.concurrency"
+        );
+        range!(
+            self.jobs.stall_timeout_s,
+            d.jobs.stall_timeout_s,
+            10,
+            3600,
+            "jobs.stall_timeout_s"
+        );
+        range!(
+            self.jobs.no_progress_cap_min,
+            d.jobs.no_progress_cap_min,
+            1,
+            240,
+            "jobs.no_progress_cap_min"
+        );
+        range!(
+            self.triggers.edge_pos,
+            d.triggers.edge_pos,
+            0.0,
+            1.0,
+            "triggers.edge_pos"
+        );
         if !["left", "right", "top", "bottom"].contains(&self.triggers.edge.as_str()) {
             w.push("triggers.edge: unknown value, using default".into());
             self.triggers.edge = d.triggers.edge;
@@ -130,7 +254,9 @@ pub fn load(path: &Path) -> Loaded {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return defaults(),
         Err(e) => {
             let mut l = defaults();
-            l.warnings.push(format!("settings.json couldn't be read ({e}); using defaults and leaving the file alone"));
+            l.warnings.push(format!(
+                "settings.json couldn't be read ({e}); using defaults and leaving the file alone"
+            ));
             l.read_only = true;
             return l;
         }
@@ -158,11 +284,17 @@ pub fn from_value(raw: Value) -> Loaded {
     let mut warnings = Vec::new();
     let defaults = serde_json::to_value(Settings::default()).expect("defaults serialize");
     let merged = overlay(&defaults, &raw, "", &mut warnings);
-    let mut settings: Settings = serde_json::from_value(merged).expect("overlay keeps default types");
+    let mut settings: Settings =
+        serde_json::from_value(merged).expect("overlay keeps default types");
     // v1 has no migrations; later versions transform `raw` here before overlaying.
     settings.version = CURRENT_VERSION;
     settings.sanitize(&mut warnings);
-    Loaded { settings, raw, warnings, read_only: false }
+    Loaded {
+        settings,
+        raw,
+        warnings,
+        read_only: false,
+    }
 }
 
 pub fn apply_patch(current: &Loaded, patch: Value) -> Loaded {
@@ -175,10 +307,15 @@ pub fn apply_patch(current: &Loaded, patch: Value) -> Loaded {
 
 pub fn save(path: &Path, l: &Loaded) -> std::io::Result<()> {
     if l.read_only {
-        return Err(std::io::Error::other("settings.json couldn't be read at startup; not overwriting it"));
+        return Err(std::io::Error::other(
+            "settings.json couldn't be read at startup; not overwriting it",
+        ));
     }
     let mut out = l.raw.clone();
-    deep_merge(&mut out, &serde_json::to_value(&l.settings).expect("settings serialize"));
+    deep_merge(
+        &mut out,
+        &serde_json::to_value(&l.settings).expect("settings serialize"),
+    );
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -193,7 +330,11 @@ fn overlay(default: &Value, user: &Value, path: &str, w: &mut Vec<String>) -> Va
         (Value::Object(d), Value::Object(u)) => {
             let mut out = Map::new();
             for (k, dv) in d {
-                let p = if path.is_empty() { k.clone() } else { format!("{path}.{k}") };
+                let p = if path.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{path}.{k}")
+                };
                 let v = match u.get(k) {
                     Some(uv) => overlay(dv, uv, &p, w),
                     None => dv.clone(),
@@ -204,7 +345,11 @@ fn overlay(default: &Value, user: &Value, path: &str, w: &mut Vec<String>) -> Va
         }
         (Value::Bool(_), Value::Bool(_)) | (Value::String(_), Value::String(_)) => user.clone(),
         (Value::Number(dn), Value::Number(un)) => {
-            let ok = if dn.is_f64() { true } else { un.as_u64().is_some_and(|v| v <= u32::MAX as u64) };
+            let ok = if dn.is_f64() {
+                true
+            } else {
+                un.as_u64().is_some_and(|v| v <= u32::MAX as u64)
+            };
             if ok {
                 user.clone()
             } else {
@@ -260,11 +405,17 @@ mod tests {
         assert!(s.shell.explorer_entry);
         assert_eq!(s.output.location, "next_to_original");
         assert_eq!((s.quality.mp3_kbps, s.quality.aac_kbps), (192, 192));
-        assert_eq!((s.quality.jpg_q, s.quality.webp_q, s.quality.avif_q), (85, 82, 60));
+        assert_eq!(
+            (s.quality.jpg_q, s.quality.webp_q, s.quality.avif_q),
+            (85, 82, 60)
+        );
         assert_eq!((s.gif.fps, s.gif.width), (12, 480));
         assert_eq!((s.shrink.target_mb, s.shrink.image_px), (25, 2048));
         assert_eq!(s.jobs.concurrency, 2);
-        assert_eq!((s.jobs.stall_timeout_s, s.jobs.no_progress_cap_min), (60, 10));
+        assert_eq!(
+            (s.jobs.stall_timeout_s, s.jobs.no_progress_cap_min),
+            (60, 10)
+        );
         assert!(s.app.start_with_windows && !s.app.first_run_done);
     }
 
@@ -294,10 +445,15 @@ mod tests {
     fn unknown_fields_survive_a_save() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        std::fs::write(&path, r#"{"future_flag":true,"quality":{"mp3_kbps":256,"later":1}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"future_flag":true,"quality":{"mp3_kbps":256,"later":1}}"#,
+        )
+        .unwrap();
         let l = load(&path);
         save(&path, &l).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(v["future_flag"], json!(true));
         assert_eq!(v["quality"]["later"], json!(1));
         assert_eq!(v["quality"]["mp3_kbps"], json!(256));
@@ -322,7 +478,10 @@ mod tests {
         let l = load(&path);
         assert!(!l.read_only);
         assert!(!path.exists());
-        assert_eq!(std::fs::read_to_string(dir.path().join("settings.json.bad")).unwrap(), "{not json");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("settings.json.bad")).unwrap(),
+            "{not json"
+        );
         save(&path, &l).unwrap();
     }
 

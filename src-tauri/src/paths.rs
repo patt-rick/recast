@@ -12,13 +12,20 @@ pub struct Paths {
 impl Paths {
     pub fn from_env() -> Self {
         Self {
-            local: dirs::data_local_dir().expect("LOCALAPPDATA is not set").join("Recast"),
-            roaming: dirs::config_dir().expect("APPDATA is not set").join("Recast"),
+            local: dirs::data_local_dir()
+                .expect("LOCALAPPDATA is not set")
+                .join("Recast"),
+            roaming: dirs::config_dir()
+                .expect("APPDATA is not set")
+                .join("Recast"),
         }
     }
 
     pub fn under(root: &Path) -> Self {
-        Self { local: root.join("local"), roaming: root.join("roaming") }
+        Self {
+            local: root.join("local"),
+            roaming: root.join("roaming"),
+        }
     }
 
     pub fn engines(&self) -> PathBuf {

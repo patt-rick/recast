@@ -21,7 +21,13 @@ pub struct Tracker {
 
 impl Tracker {
     pub fn new(kind: ProgressKind, duration_s: Option<f64>) -> Self {
-        Self { kind, duration_s, last_us: -1, total_pages: None, last_page: 0 }
+        Self {
+            kind,
+            duration_s,
+            last_us: -1,
+            total_pages: None,
+            last_page: 0,
+        }
     }
 
     pub fn feed(&mut self, line: &str) -> Feed {
@@ -39,7 +45,9 @@ impl Tracker {
     pub fn stall_armed(&self) -> bool {
         match self.kind {
             ProgressKind::Ffmpeg => {
-                let near_end = self.duration_s.is_some_and(|d| d > 0.0 && self.last_us as f64 / 1e6 >= d * 0.99);
+                let near_end = self
+                    .duration_s
+                    .is_some_and(|d| d > 0.0 && self.last_us as f64 / 1e6 >= d * 0.99);
                 self.last_us > 0 && !near_end
             }
             ProgressKind::GhostscriptPages => self.total_pages.is_some() || self.last_page > 0,
@@ -48,20 +56,30 @@ impl Tracker {
     }
 
     fn ffmpeg(&mut self, line: &str) -> Feed {
-        let Some((k, v)) = line.split_once('=') else { return Feed::default() };
-        if k.is_empty() || !k.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') {
+        let Some((k, v)) = line.split_once('=') else {
+            return Feed::default();
+        };
+        if k.is_empty()
+            || !k
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        {
             return Feed::default();
         }
-        let mut f = Feed { consumed: true, ..Default::default() };
+        let mut f = Feed {
+            consumed: true,
+            ..Default::default()
+        };
         if k == "out_time_us" {
             if let Ok(us) = v.trim().parse::<i64>()
-                && us > self.last_us {
-                    self.last_us = us;
-                    f.advanced = true;
-                    if let Some(d) = self.duration_s.filter(|d| *d > 0.0) {
-                        f.pct = Some(((us as f64 / 1e6) / d).clamp(0.0, 1.0) as f32);
-                    }
+                && us > self.last_us
+            {
+                self.last_us = us;
+                f.advanced = true;
+                if let Some(d) = self.duration_s.filter(|d| *d > 0.0) {
+                    f.pct = Some(((us as f64 / 1e6) / d).clamp(0.0, 1.0) as f32);
                 }
+            }
         } else if k == "progress" && v.trim() == "end" {
             f.advanced = true;
             f.pct = Some(1.0);
@@ -71,13 +89,30 @@ impl Tracker {
 
     fn gs(&mut self, line: &str) -> Feed {
         if let Some(rest) = line.strip_prefix("Processing pages ") {
-            self.total_pages = rest.trim_end_matches('.').rsplit(' ').next().and_then(|t| t.parse().ok());
-            return Feed { consumed: true, advanced: true, pct: Some(0.0) };
+            self.total_pages = rest
+                .trim_end_matches('.')
+                .rsplit(' ')
+                .next()
+                .and_then(|t| t.parse().ok());
+            return Feed {
+                consumed: true,
+                advanced: true,
+                pct: Some(0.0),
+            };
         }
-        if let Some(n) = line.strip_prefix("Page ").and_then(|t| t.trim().parse::<u32>().ok()) {
+        if let Some(n) = line
+            .strip_prefix("Page ")
+            .and_then(|t| t.trim().parse::<u32>().ok())
+        {
             self.last_page = self.last_page.max(n);
-            let pct = self.total_pages.map(|t| ((n.saturating_sub(1)) as f32 / t.max(1) as f32).min(1.0));
-            return Feed { consumed: true, advanced: true, pct };
+            let pct = self
+                .total_pages
+                .map(|t| ((n.saturating_sub(1)) as f32 / t.max(1) as f32).min(1.0));
+            return Feed {
+                consumed: true,
+                advanced: true,
+                pct,
+            };
         }
         Feed::default()
     }
@@ -90,27 +125,94 @@ mod tests {
     #[test]
     fn ffmpeg_progress_lines() {
         let mut t = Tracker::new(ProgressKind::Ffmpeg, Some(10.0));
-        assert_eq!(t.feed("frame=12"), Feed { consumed: true, advanced: false, pct: None });
-        assert_eq!(t.feed("out_time_us=5000000"), Feed { consumed: true, advanced: true, pct: Some(0.5) });
-        assert_eq!(t.feed("out_time_us=5000000"), Feed { consumed: true, advanced: false, pct: None }, "no movement is not progress");
-        assert_eq!(t.feed("out_time_us=N/A"), Feed { consumed: true, advanced: false, pct: None });
-        assert_eq!(t.feed("progress=end"), Feed { consumed: true, advanced: true, pct: Some(1.0) });
+        assert_eq!(
+            t.feed("frame=12"),
+            Feed {
+                consumed: true,
+                advanced: false,
+                pct: None
+            }
+        );
+        assert_eq!(
+            t.feed("out_time_us=5000000"),
+            Feed {
+                consumed: true,
+                advanced: true,
+                pct: Some(0.5)
+            }
+        );
+        assert_eq!(
+            t.feed("out_time_us=5000000"),
+            Feed {
+                consumed: true,
+                advanced: false,
+                pct: None
+            },
+            "no movement is not progress"
+        );
+        assert_eq!(
+            t.feed("out_time_us=N/A"),
+            Feed {
+                consumed: true,
+                advanced: false,
+                pct: None
+            }
+        );
+        assert_eq!(
+            t.feed("progress=end"),
+            Feed {
+                consumed: true,
+                advanced: true,
+                pct: Some(1.0)
+            }
+        );
         assert_eq!(t.feed("[mp3 @ 0x1] Some warning"), Feed::default());
     }
 
     #[test]
     fn ffmpeg_without_duration_still_advances() {
         let mut t = Tracker::new(ProgressKind::Ffmpeg, None);
-        assert_eq!(t.feed("out_time_us=100"), Feed { consumed: true, advanced: true, pct: None });
+        assert_eq!(
+            t.feed("out_time_us=100"),
+            Feed {
+                consumed: true,
+                advanced: true,
+                pct: None
+            }
+        );
     }
 
     #[test]
     fn ghostscript_pages() {
         let mut t = Tracker::new(ProgressKind::GhostscriptPages, None);
-        assert_eq!(t.feed("GPL Ghostscript 10.04.0 (2024-09-18)"), Feed::default());
-        assert_eq!(t.feed("Processing pages 1 through 4."), Feed { consumed: true, advanced: true, pct: Some(0.0) });
-        assert_eq!(t.feed("Page 1"), Feed { consumed: true, advanced: true, pct: Some(0.0) });
-        assert_eq!(t.feed("Page 3"), Feed { consumed: true, advanced: true, pct: Some(0.5) });
+        assert_eq!(
+            t.feed("GPL Ghostscript 10.04.0 (2024-09-18)"),
+            Feed::default()
+        );
+        assert_eq!(
+            t.feed("Processing pages 1 through 4."),
+            Feed {
+                consumed: true,
+                advanced: true,
+                pct: Some(0.0)
+            }
+        );
+        assert_eq!(
+            t.feed("Page 1"),
+            Feed {
+                consumed: true,
+                advanced: true,
+                pct: Some(0.0)
+            }
+        );
+        assert_eq!(
+            t.feed("Page 3"),
+            Feed {
+                consumed: true,
+                advanced: true,
+                pct: Some(0.5)
+            }
+        );
     }
 
     #[test]

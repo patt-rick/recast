@@ -24,7 +24,9 @@ pub fn run() {
         // Must be first. A second copy would mark this copy's running jobs INTERRUPTED
         // and delete their temp dirs; instead it just focuses the running instance.
         // (Plan 3 extends this to forward Explorer selections.)
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| tray::show_companion(app)))
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            tray::show_companion(app)
+        }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -35,10 +37,11 @@ pub fn run() {
         .on_window_event(|window, event| {
             // Closing the companion hides it; Recast stays in the tray (spec §4.5).
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
-                && window.label() == "companion" {
-                    let _ = window.hide();
-                    api.prevent_close();
-                }
+                && window.label() == "companion"
+            {
+                let _ = window.hide();
+                api.prevent_close();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             ipc::inspect,

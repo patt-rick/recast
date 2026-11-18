@@ -8,7 +8,7 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_state::AppState;
-use crate::engines::{EngineRow, Engines, ENGINE_BUSY};
+use crate::engines::{ENGINE_BUSY, EngineRow, Engines};
 use crate::history::{History, JobRecord};
 use crate::jobs::notify::Notifier;
 use crate::jobs::{Events, JobEvent};
@@ -24,7 +24,10 @@ pub struct TauriEvents {
 
 impl TauriEvents {
     pub fn new(app: AppHandle) -> Self {
-        Self { app, notifier: Mutex::new(Notifier::default()) }
+        Self {
+            app,
+            notifier: Mutex::new(Notifier::default()),
+        }
     }
 }
 
@@ -43,9 +46,16 @@ impl Events for TauriEvents {
         // Out of the lock before show(): the OS call may be slow.
         let n = lock(&self.notifier).on_event(ev);
         if let Some(n) = n
-            && let Err(e) = self.app.notification().builder().title(&n.title).body(&n.body).show() {
-                log::warn!("notification: {e}");
-            }
+            && let Err(e) = self
+                .app
+                .notification()
+                .builder()
+                .title(&n.title)
+                .body(&n.body)
+                .show()
+        {
+            log::warn!("notification: {e}");
+        }
     }
 }
 
@@ -67,8 +77,12 @@ pub struct Notice {
     pub bundled: bool,
 }
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
-    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -78,7 +92,11 @@ pub async fn inspect(state: State<'_, AppState>, paths: Vec<String>) -> Result<P
 }
 
 #[tauri::command]
-pub async fn start_jobs(state: State<'_, AppState>, preset_id: String, paths: Vec<String>) -> Result<Vec<String>, String> {
+pub async fn start_jobs(
+    state: State<'_, AppState>,
+    preset_id: String,
+    paths: Vec<String>,
+) -> Result<Vec<String>, String> {
     let jobs = state.jobs.clone();
     blocking(move || {
         let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
@@ -98,7 +116,11 @@ pub async fn cancel_job(state: State<'_, AppState>, id: String) -> Result<(), St
 }
 
 #[tauri::command]
-pub async fn retry_job(state: State<'_, AppState>, id: String, fallback: bool) -> Result<Vec<String>, String> {
+pub async fn retry_job(
+    state: State<'_, AppState>,
+    id: String,
+    fallback: bool,
+) -> Result<Vec<String>, String> {
     let jobs = state.jobs.clone();
     blocking(move || jobs.retry(&id, fallback)).await
 }
@@ -110,7 +132,13 @@ pub async fn list_jobs(state: State<'_, AppState>, page: u32) -> Result<Vec<JobL
         let records = lock(&history).list(page, 50).map_err(|e| e.to_string())?;
         Ok(records
             .into_iter()
-            .map(|record| JobListItem { preset_label: catalog.get(&record.preset_id).map(|p| p.label.clone()).unwrap_or_default(), record })
+            .map(|record| JobListItem {
+                preset_label: catalog
+                    .get(&record.preset_id)
+                    .map(|p| p.label.clone())
+                    .unwrap_or_default(),
+                record,
+            })
             .collect())
     })
     .await
@@ -119,7 +147,9 @@ pub async fn list_jobs(state: State<'_, AppState>, page: u32) -> Result<Vec<JobL
 /// A row with a temp folder still recorded is being (or waiting to be) cleaned up.
 fn check_removable(history: &History, id: &str) -> Result<(), String> {
     match history.get(id).map_err(|e| e.to_string())? {
-        Some(r) if r.temp_path.is_some() => Err("Recast is still cleaning up this job's files.".into()),
+        Some(r) if r.temp_path.is_some() => {
+            Err("Recast is still cleaning up this job's files.".into())
+        }
         _ => Ok(()),
     }
 }
@@ -179,8 +209,15 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
 }
 
 #[tauri::command]
-pub async fn set_settings(state: State<'_, AppState>, patch: serde_json::Value) -> Result<Settings, String> {
-    let (settings, jobs, file) = (state.settings.clone(), state.jobs.clone(), state.paths.settings());
+pub async fn set_settings(
+    state: State<'_, AppState>,
+    patch: serde_json::Value,
+) -> Result<Settings, String> {
+    let (settings, jobs, file) = (
+        state.settings.clone(),
+        state.jobs.clone(),
+        state.paths.settings(),
+    );
     blocking(move || {
         let mut current = lock(&settings);
         let next = settings::apply_patch(&current, patch);
@@ -199,7 +236,10 @@ pub async fn set_settings(state: State<'_, AppState>, patch: serde_json::Value) 
 
 /// The saved output of a job: only a done job whose file still exists qualifies.
 fn job_output(history: &History, id: &str) -> Result<PathBuf, String> {
-    let rec = history.get(id).map_err(|e| e.to_string())?.ok_or("That conversion is no longer in the list.")?;
+    let rec = history
+        .get(id)
+        .map_err(|e| e.to_string())?
+        .ok_or("That conversion is no longer in the list.")?;
     if rec.status != "done" {
         return Err("That conversion has no saved file.".into());
     }
@@ -211,22 +251,38 @@ fn job_output(history: &History, id: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub async fn reveal_job(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub async fn reveal_job(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
     let history = state.history.clone();
     let out = blocking(move || job_output(&lock(&history), &id)).await?;
-    app.opener().reveal_item_in_dir(out).map_err(|e| e.to_string())
+    app.opener()
+        .reveal_item_in_dir(out)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn open_job(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub async fn open_job(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
     let history = state.history.clone();
     let out = blocking(move || job_output(&lock(&history), &id)).await?;
-    app.opener().open_path(out.to_string_lossy().into_owned(), None::<&str>).map_err(|e| e.to_string())
+    app.opener()
+        .open_path(out.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|e| e.to_string())
 }
 
 /// Shows the licence file of the notice at `index` (as listed by `notices`) in its folder.
 #[tauri::command]
-pub async fn reveal_notice(app: AppHandle, state: State<'_, AppState>, index: usize) -> Result<(), String> {
+pub async fn reveal_notice(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    index: usize,
+) -> Result<(), String> {
     let (engines, licence) = (state.engines.clone(), state.sevenzip_licence.clone());
     let file = blocking(move || {
         build_notices(&engines, &licence)
@@ -236,14 +292,19 @@ pub async fn reveal_notice(app: AppHandle, state: State<'_, AppState>, index: us
             .ok_or_else(|| "There is no licence file to show.".to_string())
     })
     .await?;
-    app.opener().reveal_item_in_dir(file).map_err(|e| e.to_string())
+    app.opener()
+        .reveal_item_in_dir(file)
+        .map_err(|e| e.to_string())
 }
 
 fn licence_file(dir: &std::path::Path) -> Option<String> {
     crate::fsutil::walk_files(dir)
         .into_iter()
         .filter(|p| {
-            let n = p.file_name().map(|n| n.to_string_lossy().to_ascii_uppercase()).unwrap_or_default();
+            let n = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_ascii_uppercase())
+                .unwrap_or_default();
             n.starts_with("LICENSE") || n.starts_with("COPYING") || n.starts_with("COPYRIGHT")
         })
         .min_by_key(|p| p.components().count())
@@ -269,7 +330,9 @@ fn build_notices(engines: &Engines, sevenzip_licence: &std::path::Path) -> Vec<N
         licence: "LGPL-2.1-or-later with BSD-3-Clause and the unRAR restriction".into(),
         homepage: "https://www.7-zip.org".into(),
         source_url: Some("https://www.7-zip.org/download.html".into()),
-        licence_file: sevenzip_licence.exists().then(|| sevenzip_licence.to_string_lossy().into_owned()),
+        licence_file: sevenzip_licence
+            .exists()
+            .then(|| sevenzip_licence.to_string_lossy().into_owned()),
         bundled: true,
     });
     out
@@ -288,8 +351,18 @@ mod tests {
 
     fn history_with(id: &str, status: &str, output: Option<&str>, temp: Option<&str>) -> History {
         let h = History::open_in_memory().unwrap();
-        h.insert(id, "image-png", &["C:\\a.jpg".to_string()], 1).unwrap();
-        h.finish(id, &Finish { status, output, ..Default::default() }, 2).unwrap();
+        h.insert(id, "image-png", &["C:\\a.jpg".to_string()], 1)
+            .unwrap();
+        h.finish(
+            id,
+            &Finish {
+                status,
+                output,
+                ..Default::default()
+            },
+            2,
+        )
+        .unwrap();
         h.set_temp(id, temp).unwrap();
         h
     }
@@ -297,7 +370,10 @@ mod tests {
     #[test]
     fn rows_with_a_temp_folder_are_not_removable() {
         let h = history_with("a", "failed", None, Some("C:\\x\\.recast-a"));
-        assert_eq!(check_removable(&h, "a").unwrap_err(), "Recast is still cleaning up this job's files.");
+        assert_eq!(
+            check_removable(&h, "a").unwrap_err(),
+            "Recast is still cleaning up this job's files."
+        );
         h.set_temp("a", None).unwrap();
         assert!(check_removable(&h, "a").is_ok());
         assert!(check_removable(&h, "missing").is_ok());
@@ -309,11 +385,18 @@ mod tests {
         let file = dir.path().join("out.png");
         std::fs::write(&file, b"x").unwrap();
         let f = file.to_str().unwrap();
-        assert_eq!(job_output(&history_with("a", "done", Some(f), None), "a").unwrap(), file);
+        assert_eq!(
+            job_output(&history_with("a", "done", Some(f), None), "a").unwrap(),
+            file
+        );
         assert!(job_output(&history_with("b", "failed", Some(f), None), "b").is_err());
         assert!(job_output(&history_with("c", "done", None, None), "c").is_err());
         assert!(job_output(&history_with("e", "done", Some(f), None), "zzz").is_err());
         std::fs::remove_file(&file).unwrap();
-        assert!(job_output(&history_with("d", "done", Some(f), None), "d").unwrap_err().contains("moved or deleted"));
+        assert!(
+            job_output(&history_with("d", "done", Some(f), None), "d")
+                .unwrap_err()
+                .contains("moved or deleted")
+        );
     }
 }

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::detect::{canonical, ext_of, Kind};
+use crate::detect::{Kind, canonical, ext_of};
 
 pub const BUNDLED: &str = include_str!("../../presets/presets.toml");
 
@@ -26,7 +26,16 @@ pub fn pandoc_reader(ext: &str) -> String {
 mod catalog_tests;
 
 /// Placeholders the job runner provides; `setting.*` comes from Settings::to_vars.
-pub const BUILTIN_PLACEHOLDERS: &[&str] = &["in", "inputs", "in_dir", "out", "out_dir", "reader", "final_stem", "video_kbps"];
+pub const BUILTIN_PLACEHOLDERS: &[&str] = &[
+    "in",
+    "inputs",
+    "in_dir",
+    "out",
+    "out_dir",
+    "reader",
+    "final_stem",
+    "video_kbps",
+];
 
 #[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -54,7 +63,13 @@ impl OutNaming {
 impl TryFrom<String> for OutNaming {
     type Error = String;
     fn try_from(s: String) -> Result<Self, String> {
-        let nonempty = |t: &str| if t.trim().is_empty() { Err(format!("empty name in out_naming '{s}'")) } else { Ok(t.to_string()) };
+        let nonempty = |t: &str| {
+            if t.trim().is_empty() {
+                Err(format!("empty name in out_naming '{s}'"))
+            } else {
+                Ok(t.to_string())
+            }
+        };
         if s == "replace_ext" {
             Ok(OutNaming::ReplaceExt)
         } else if let Some(t) = s.strip_prefix("suffix:") {
@@ -154,7 +169,11 @@ impl Preset {
 
     /// Does any pass use this placeholder?
     pub fn uses(&self, key: &str) -> bool {
-        self.passes.iter().flatten().any(|a| placeholders(a).map(|k| k.iter().any(|p| p == key)).unwrap_or(false))
+        self.passes.iter().flatten().any(|a| {
+            placeholders(a)
+                .map(|k| k.iter().any(|p| p == key))
+                .unwrap_or(false)
+        })
     }
 }
 
@@ -164,7 +183,9 @@ pub fn placeholders(s: &str) -> Result<Vec<String>, String> {
     let mut rest = s;
     while let Some(start) = rest.find('{') {
         let after = &rest[start + 1..];
-        let end = after.find('}').ok_or_else(|| format!("unclosed placeholder in '{s}'"))?;
+        let end = after
+            .find('}')
+            .ok_or_else(|| format!("unclosed placeholder in '{s}'"))?;
         out.push(after[..end].to_string());
         rest = &after[end + 1..];
     }
@@ -187,7 +208,11 @@ impl Catalog {
     }
 
     /// `engines`: engine id → logical bin names (from the manifest).
-    pub fn validate(&self, engines: &HashMap<String, Vec<String>>, setting_keys: &BTreeSet<String>) -> Result<(), Vec<String>> {
+    pub fn validate(
+        &self,
+        engines: &HashMap<String, Vec<String>>,
+        setting_keys: &BTreeSet<String>,
+    ) -> Result<(), Vec<String>> {
         let mut errs = Vec::new();
         let mut seen = HashSet::new();
         for p in &self.presets {
@@ -197,7 +222,10 @@ impl Catalog {
             }
             match engines.get(&p.engine) {
                 None => errs.push(format!("{id}: unknown engine '{}'", p.engine)),
-                Some(bins) if !bins.contains(&p.bin) => errs.push(format!("{id}: engine '{}' has no bin '{}'", p.engine, p.bin)),
+                Some(bins) if !bins.contains(&p.bin) => errs.push(format!(
+                    "{id}: engine '{}' has no bin '{}'",
+                    p.engine, p.bin
+                )),
                 _ => {}
             }
             for r in &p.requires {
@@ -236,7 +264,9 @@ impl Catalog {
             if p.min_files >= 2 && !has("inputs") {
                 errs.push(format!("{id}: a multi-file preset must use {{inputs}}"));
             }
-            if p.out_naming.is_folder() != has("out_dir") || (!p.out_naming.is_folder() && !has("out")) {
+            if p.out_naming.is_folder() != has("out_dir")
+                || (!p.out_naming.is_folder() && !has("out"))
+            {
                 errs.push(format!("{id}: output placeholder doesn't match out_naming"));
             }
         }
@@ -281,7 +311,10 @@ passes = [['--empty', '--pages', '{inputs}', '--', '{out}']]
 
     fn engines() -> HashMap<String, Vec<String>> {
         HashMap::from([
-            ("ffmpeg".to_string(), vec!["ffmpeg".to_string(), "ffprobe".to_string()]),
+            (
+                "ffmpeg".to_string(),
+                vec!["ffmpeg".to_string(), "ffprobe".to_string()],
+            ),
             ("qpdf".to_string(), vec!["qpdf".to_string()]),
         ])
     }
@@ -303,9 +336,18 @@ passes = [['--empty', '--pages', '{inputs}', '--', '{out}']]
 
     #[test]
     fn out_naming_parsing() {
-        assert_eq!(OutNaming::try_from("replace_ext".to_string()).unwrap(), OutNaming::ReplaceExt);
-        assert_eq!(OutNaming::try_from("suffix:compressed".to_string()).unwrap(), OutNaming::Suffix("compressed".into()));
-        assert_eq!(OutNaming::try_from("folder:pages".to_string()).unwrap(), OutNaming::Folder("pages".into()));
+        assert_eq!(
+            OutNaming::try_from("replace_ext".to_string()).unwrap(),
+            OutNaming::ReplaceExt
+        );
+        assert_eq!(
+            OutNaming::try_from("suffix:compressed".to_string()).unwrap(),
+            OutNaming::Suffix("compressed".into())
+        );
+        assert_eq!(
+            OutNaming::try_from("folder:pages".to_string()).unwrap(),
+            OutNaming::Folder("pages".into())
+        );
         assert!(OutNaming::try_from("suffix:".to_string()).is_err());
         assert!(OutNaming::try_from("rename".to_string()).is_err());
     }
@@ -316,31 +358,52 @@ passes = [['--empty', '--pages', '{inputs}', '--', '{out}']]
             .replace("engine = \"qpdf\"", "engine = \"nope\"")
             .replace("{setting.quality.mp3_kbps}", "{setting.quality.nope}")
             .replace("id = \"pdf-merge\"", "id = \"v-mp3\"");
-        let errs = Catalog::parse(&bad).unwrap().validate(&engines(), &keys()).unwrap_err();
+        let errs = Catalog::parse(&bad)
+            .unwrap()
+            .validate(&engines(), &keys())
+            .unwrap_err();
         let all = errs.join("\n");
         assert!(all.contains("duplicate id"), "{all}");
         assert!(all.contains("unknown engine 'nope'"), "{all}");
-        assert!(all.contains("unknown placeholder {setting.quality.nope}"), "{all}");
+        assert!(
+            all.contains("unknown placeholder {setting.quality.nope}"),
+            "{all}"
+        );
     }
 
     #[test]
     fn inputs_placeholder_requires_multi_file_preset() {
         let bad = MINI.replace("min_files = 2\n", "");
-        let errs = Catalog::parse(&bad).unwrap().validate(&engines(), &keys()).unwrap_err();
+        let errs = Catalog::parse(&bad)
+            .unwrap()
+            .validate(&engines(), &keys())
+            .unwrap_err();
         assert!(errs.join("\n").contains("{inputs} needs min_files >= 2"));
     }
 
     #[test]
     fn unknown_requirement_is_rejected() {
         let bad = MINI.replace("audio_stream", "video_stream");
-        let errs = Catalog::parse(&bad).unwrap().validate(&engines(), &keys()).unwrap_err();
-        assert!(errs.join("
-").contains("unknown requirement 'video_stream'"), "{errs:?}");
+        let errs = Catalog::parse(&bad)
+            .unwrap()
+            .validate(&engines(), &keys())
+            .unwrap_err();
+        assert!(
+            errs.join(
+                "
+"
+            )
+            .contains("unknown requirement 'video_stream'"),
+            "{errs:?}"
+        );
     }
 
     #[test]
     fn placeholder_scanner() {
-        assert_eq!(placeholders("-sOutputFile={out_dir}\\page-%03d.png").unwrap(), vec!["out_dir"]);
+        assert_eq!(
+            placeholders("-sOutputFile={out_dir}\\page-%03d.png").unwrap(),
+            vec!["out_dir"]
+        );
         assert_eq!(placeholders("{in}[0]").unwrap(), vec!["in"]);
         assert!(placeholders("{in").is_err());
     }

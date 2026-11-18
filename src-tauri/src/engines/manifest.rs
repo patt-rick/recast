@@ -47,7 +47,10 @@ impl Manifest {
     }
 
     pub fn bins_map(&self) -> HashMap<String, Vec<String>> {
-        self.engines.iter().map(|e| (e.id.clone(), e.bins.keys().cloned().collect())).collect()
+        self.engines
+            .iter()
+            .map(|e| (e.id.clone(), e.bins.keys().cloned().collect()))
+            .collect()
     }
 
     pub fn validate(&self) -> Result<(), Vec<String>> {
@@ -64,7 +67,12 @@ impl Manifest {
             if !e.url.starts_with("https://") {
                 errs.push(format!("{id}: url must be https"));
             }
-            if e.sha256.len() != 64 || !e.sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+            if e.sha256.len() != 64
+                || !e
+                    .sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
                 errs.push(format!("{id}: sha256 must be 64 lowercase hex chars"));
             }
             if e.size == 0 {
@@ -77,9 +85,10 @@ impl Manifest {
                 errs.push(format!("{id}: bins is empty"));
             }
             if let Some(b) = e.check.first()
-                && !e.bins.contains_key(b) {
-                    errs.push(format!("{id}: check uses unknown bin '{b}'"));
-                }
+                && !e.bins.contains_key(b)
+            {
+                errs.push(format!("{id}: check uses unknown bin '{b}'"));
+            }
         }
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
@@ -116,8 +125,18 @@ qpdf = "qpdf.exe"
 
     #[test]
     fn rejects_http_bad_hash_and_unknown_archive() {
-        let bad = GOOD.replace("https://", "http://").replace("\"0000000000000000000000000000000000000000000000000000000000000000\"", "\"abc\"").replace("\"zip\"", "\"rar\"");
-        let errs = Manifest::parse(&bad).unwrap().validate().unwrap_err().join("\n");
+        let bad = GOOD
+            .replace("https://", "http://")
+            .replace(
+                "\"0000000000000000000000000000000000000000000000000000000000000000\"",
+                "\"abc\"",
+            )
+            .replace("\"zip\"", "\"rar\"");
+        let errs = Manifest::parse(&bad)
+            .unwrap()
+            .validate()
+            .unwrap_err()
+            .join("\n");
         assert!(errs.contains("https"), "{errs}");
         assert!(errs.contains("sha256"), "{errs}");
         assert!(errs.contains("archive"), "{errs}");
@@ -128,6 +147,7 @@ qpdf = "qpdf.exe"
         let m = Manifest::parse(BUNDLED).unwrap();
         m.validate().unwrap();
         let c = crate::presets::Catalog::parse(crate::presets::BUNDLED).unwrap();
-        c.validate(&m.bins_map(), &crate::settings::var_keys()).unwrap();
+        c.validate(&m.bins_map(), &crate::settings::var_keys())
+            .unwrap();
     }
 }

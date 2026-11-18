@@ -14,7 +14,7 @@ use crate::engines::manifest::{self, Manifest};
 use crate::engines::{EngineEvent, Engines};
 use crate::history::History;
 use crate::ipc::TauriEvents;
-use crate::jobs::{now, JobManager};
+use crate::jobs::{JobManager, now};
 use crate::paths::Paths;
 use crate::presets::{self, Catalog};
 use crate::settings;
@@ -44,12 +44,25 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let manifest = Manifest::parse(manifest::BUNDLED)?;
     manifest.validate().map_err(|e| e.join("; "))?;
     let catalog = Arc::new(Catalog::parse(presets::BUNDLED)?);
-    catalog.validate(&manifest.bins_map(), &settings::var_keys()).map_err(|e| e.join("; "))?;
+    catalog
+        .validate(&manifest.bins_map(), &settings::var_keys())
+        .map_err(|e| e.join("; "))?;
 
     let sevenzip = app.path().resolve("bin/7z.exe", BaseDirectory::Resource)?;
-    let sevenzip_licence = app.path().resolve("bin/7zip-License.txt", BaseDirectory::Resource)?;
-    let engine_names: HashMap<String, String> = manifest.engines.iter().map(|e| (e.id.clone(), e.name.clone())).collect();
-    let engines = Arc::new(Engines::new(manifest, paths.engines(), sevenzip, Box::new(HttpFetcher)));
+    let sevenzip_licence = app
+        .path()
+        .resolve("bin/7zip-License.txt", BaseDirectory::Resource)?;
+    let engine_names: HashMap<String, String> = manifest
+        .engines
+        .iter()
+        .map(|e| (e.id.clone(), e.name.clone()))
+        .collect();
+    let engines = Arc::new(Engines::new(
+        manifest,
+        paths.engines(),
+        sevenzip,
+        Box::new(HttpFetcher),
+    ));
     let handle = app.handle().clone();
     engines.set_listener(Arc::new(move |e: EngineEvent| {
         let event = match &e {
@@ -60,7 +73,13 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let _ = handle.emit(event, &e);
         if let EngineEvent::Failed { id, error } = &e {
             let name = engine_names.get(id).unwrap_or(id);
-            if let Err(err) = handle.notification().builder().title(format!("Couldn't download {name}")).body(error).show() {
+            if let Err(err) = handle
+                .notification()
+                .builder()
+                .title(format!("Couldn't download {name}"))
+                .body(error)
+                .show()
+            {
                 log::warn!("notification: {err}");
             }
         }
@@ -96,13 +115,22 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         paths.local.join("tmp"),
     );
 
-    app.manage(AppState { paths, settings, catalog, engines, history, jobs, sevenzip_licence });
+    app.manage(AppState {
+        paths,
+        settings,
+        catalog,
+        engines,
+        history,
+        jobs,
+        sevenzip_licence,
+    });
     Ok(())
 }
 
 /// A job temp dir is always named `.recast-<job id>`.
 fn is_recast_temp(p: &Path) -> bool {
-    p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".recast-"))
+    p.file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with(".recast-"))
 }
 
 #[cfg(test)]

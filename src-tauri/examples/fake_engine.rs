@@ -48,7 +48,10 @@ fn main() {
         // starts a grandchild that hangs, reports its pid, then hangs itself
         "spawn_child" => {
             #[allow(clippy::zombie_processes)] // deliberate: the test needs an orphan grandchild
-            let child = Command::new(std::env::current_exe().unwrap()).arg("hang").spawn().unwrap();
+            let child = Command::new(std::env::current_exe().unwrap())
+                .arg("hang")
+                .spawn()
+                .unwrap();
             println!("child={}", child.id());
             out.lock().flush().unwrap();
             hang();
@@ -56,7 +59,9 @@ fn main() {
         // 20k stderr lines: a runner that doesn't drain stderr deadlocks here
         "chatty" => {
             for i in 0..20_000 {
-                eprintln!("stderr line {i} ................................................................");
+                eprintln!(
+                    "stderr line {i} ................................................................"
+                );
             }
             println!("progress=end");
         }
@@ -64,7 +69,11 @@ fn main() {
         "write_media" => {
             std::fs::write(&args[2], b"![](media/x.png)").unwrap();
             std::fs::create_dir_all(std::path::Path::new(&args[3]).join("media")).unwrap();
-            std::fs::write(std::path::Path::new(&args[3]).join("media").join("x.png"), b"png").unwrap();
+            std::fs::write(
+                std::path::Path::new(&args[3]).join("media").join("x.png"),
+                b"png",
+            )
+            .unwrap();
         }
         // write N bytes to args[2]
         "write_out" => std::fs::write(&args[2], vec![0u8; args[3].parse().unwrap()]).unwrap(),

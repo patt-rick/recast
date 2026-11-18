@@ -1,7 +1,7 @@
 //! Fetch → verify SHA-256 → unpack with 7z → locate bins → smoke check → atomic rename.
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
 use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -23,8 +23,13 @@ const EXTRACT_TIMEOUT: Duration = Duration::from_secs(600);
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum EngineStatus {
     NotInstalled,
-    Installing { pct: f32 },
-    Installed { version: String, update_available: bool },
+    Installing {
+        pct: f32,
+    },
+    Installed {
+        version: String,
+        update_available: bool,
+    },
     Damaged,
 }
 
@@ -44,13 +49,25 @@ pub struct InstallRecord {
 pub trait Fetcher: Send + Sync {
     /// Download `url` into `dest`, resuming if `dest` already holds a prefix. Fails
     /// (and deletes `dest`) once more than `max` bytes would be stored.
-    fn fetch(&self, url: &str, dest: &Path, max: u64, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String>;
+    fn fetch(
+        &self,
+        url: &str,
+        dest: &Path,
+        max: u64,
+        progress: &mut dyn FnMut(u64, Option<u64>),
+    ) -> Result<(), String>;
 }
 
 pub struct HttpFetcher;
 
 impl Fetcher for HttpFetcher {
-    fn fetch(&self, url: &str, dest: &Path, max: u64, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String> {
+    fn fetch(
+        &self,
+        url: &str,
+        dest: &Path,
+        max: u64,
+        progress: &mut dyn FnMut(u64, Option<u64>),
+    ) -> Result<(), String> {
         let oversize = || {
             let _ = fs::remove_file(dest);
             "the download is larger than expected, so it was stopped".to_string()
@@ -78,7 +95,13 @@ impl Fetcher for HttpFetcher {
             return Ok(()); // already complete; the checksum decides
         }
         let (mut file, mut done) = if status == reqwest::StatusCode::PARTIAL_CONTENT {
-            (OpenOptions::new().append(true).open(dest).map_err(|e| e.to_string())?, have)
+            (
+                OpenOptions::new()
+                    .append(true)
+                    .open(dest)
+                    .map_err(|e| e.to_string())?,
+                have,
+            )
         } else if status.is_success() {
             (File::create(dest).map_err(|e| e.to_string())?, 0)
         } else {
@@ -113,7 +136,13 @@ pub struct LocalFetcher {
 }
 
 impl Fetcher for LocalFetcher {
-    fn fetch(&self, _url: &str, dest: &Path, max: u64, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<(), String> {
+    fn fetch(
+        &self,
+        _url: &str,
+        dest: &Path,
+        max: u64,
+        progress: &mut dyn FnMut(u64, Option<u64>),
+    ) -> Result<(), String> {
         if fs::metadata(&self.source).map_err(|e| e.to_string())?.len() > max {
             return Err("the download is larger than expected, so it was stopped".into());
         }
@@ -135,31 +164,58 @@ pub struct InstallCtx<'a> {
     pub post_unpack: Option<&'a PostUnpack<'a>>,
 }
 
-pub fn install(entry: &EngineEntry, ctx: &InstallCtx, progress: &mut dyn FnMut(f32)) -> Result<InstallRecord, String> {
+pub fn install(
+    entry: &EngineEntry,
+    ctx: &InstallCtx,
+    progress: &mut dyn FnMut(f32),
+) -> Result<InstallRecord, String> {
     let work = ctx.root.join(".partial").join(&entry.id);
     fs::create_dir_all(&work).map_err(|e| e.to_string())?;
-    let file_name = entry.url.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("download");
+    let file_name = entry
+        .url
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("download");
     let archive = work.join(file_name);
     let staging = work.join("x");
 
     let result = (|| {
         let size = entry.size.max(1);
-        let max = if entry.size == 0 { u64::MAX } else { entry.size };
-        ctx.fetcher.fetch(&entry.url, &archive, max, &mut |done, total| {
-            progress((done as f32 / total.unwrap_or(size).max(1) as f32).min(1.0) * 0.85)
-        })?;
+        let max = if entry.size == 0 {
+            u64::MAX
+        } else {
+            entry.size
+        };
+        ctx.fetcher
+            .fetch(&entry.url, &archive, max, &mut |done, total| {
+                progress((done as f32 / total.unwrap_or(size).max(1) as f32).min(1.0) * 0.85)
+            })?;
         let digest = sha256_file(&archive).map_err(|e| e.to_string())?;
         if digest != entry.sha256 {
             let _ = fs::remove_file(&archive);
-            return Err(format!("checksum mismatch for {} (the download was deleted)", entry.name));
+            return Err(format!(
+                "checksum mismatch for {} (the download was deleted)",
+                entry.name
+            ));
         }
         let _ = fs::remove_dir_all(&staging);
         extract(ctx.sevenzip, &archive, &staging)?;
         progress(0.92);
         let record = locate_bins(entry, &staging)?;
-        fs::write(staging.join(RECORD), serde_json::to_vec_pretty(&record).unwrap()).map_err(|e| e.to_string())?;
+        fs::write(
+            staging.join(RECORD),
+            serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .map_err(|e| e.to_string())?;
         if let Some((bin, args)) = entry.check.split_first() {
-            let exe = staging.join(&record.bins.get(bin).ok_or_else(|| format!("{}: check names unknown program {bin}", entry.name))?.rel);
+            let exe = staging.join(
+                &record
+                    .bins
+                    .get(bin)
+                    .ok_or_else(|| format!("{}: check names unknown program {bin}", entry.name))?
+                    .rel,
+            );
             crate::proc::run_capture(&exe, args, Duration::from_secs(30))
                 .ok_or_else(|| format!("{} didn't start after unpacking", entry.name))?;
         }
@@ -173,7 +229,8 @@ pub fn install(entry: &EngineEntry, ctx: &InstallCtx, progress: &mut dyn FnMut(f
             fs::remove_dir_all(&final_dir).map_err(|e| e.to_string())?;
         }
         // Defender scans hundreds of fresh exe/dll files; retry the directory rename.
-        crate::fsutil::rename_with_retry(&staging, &final_dir, Duration::from_secs(15)).map_err(|e| e.to_string())?;
+        crate::fsutil::rename_with_retry(&staging, &final_dir, Duration::from_secs(15))
+            .map_err(|e| e.to_string())?;
         for old in fs::read_dir(&engine_dir).into_iter().flatten().flatten() {
             if old.path() != final_dir {
                 let _ = fs::remove_dir_all(old.path());
@@ -197,11 +254,20 @@ pub fn install(entry: &EngineEntry, ctx: &InstallCtx, progress: &mut dyn FnMut(f
 fn extract(sevenzip: &Path, archive: &Path, dest: &Path) -> Result<(), String> {
     let mut out_arg = OsString::from("-o");
     out_arg.push(dest);
-    let args = [OsString::from("x"), OsString::from("-y"), out_arg, archive.as_os_str().to_owned()];
-    let c = crate::proc::run_full(sevenzip, args, &[], EXTRACT_TIMEOUT).map_err(|e| format!("couldn't run 7-Zip: {e}"))?;
+    let args = [
+        OsString::from("x"),
+        OsString::from("-y"),
+        out_arg,
+        archive.as_os_str().to_owned(),
+    ];
+    let c = crate::proc::run_full(sevenzip, args, &[], EXTRACT_TIMEOUT)
+        .map_err(|e| format!("couldn't run 7-Zip: {e}"))?;
     match c.status {
         Some(st) if st.success() => Ok(()),
-        Some(_) => Err(format!("unpacking failed: {}", String::from_utf8_lossy(&c.stderr).trim())),
+        Some(_) => Err(format!(
+            "unpacking failed: {}",
+            String::from_utf8_lossy(&c.stderr).trim()
+        )),
         None => Err("unpacking took too long, so it was stopped".into()),
     }
 }
@@ -212,19 +278,41 @@ fn locate_bins(entry: &EngineEntry, dir: &Path) -> Result<InstallRecord, String>
     for (logical, exe) in &entry.bins {
         let found = files
             .iter()
-            .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(exe)))
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case(exe))
+            })
             .min_by_key(|p| p.components().count())
             .ok_or_else(|| format!("{exe} not found in the {} download", entry.name))?;
-        let rel = found.strip_prefix(dir).unwrap().to_string_lossy().replace('/', "\\");
-        bins.insert(logical.clone(), BinRecord { rel, sha256: sha256_file(found).map_err(|e| e.to_string())? });
+        let rel = found
+            .strip_prefix(dir)
+            .unwrap()
+            .to_string_lossy()
+            .replace('/', "\\");
+        bins.insert(
+            logical.clone(),
+            BinRecord {
+                rel,
+                sha256: sha256_file(found).map_err(|e| e.to_string())?,
+            },
+        );
     }
-    Ok(InstallRecord { id: entry.id.clone(), version: entry.version.clone(), bins })
+    Ok(InstallRecord {
+        id: entry.id.clone(),
+        version: entry.version.clone(),
+        bins,
+    })
 }
 
 /// The installed version dir (preferring the manifest's version) and its record.
 pub fn installed(entry: &EngineEntry, root: &Path) -> Option<(PathBuf, InstallRecord)> {
     let engine_dir = root.join(&entry.id);
-    let mut dirs: Vec<PathBuf> = fs::read_dir(&engine_dir).ok()?.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    let mut dirs: Vec<PathBuf> = fs::read_dir(&engine_dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
     dirs.sort_by_key(|p| p.file_name() != Some(std::ffi::OsStr::new(&entry.version)));
     dirs.into_iter().find_map(|d| {
         let rec: InstallRecord = serde_json::from_slice(&fs::read(d.join(RECORD)).ok()?).ok()?;
@@ -240,13 +328,22 @@ pub fn read_status(entry: &EngineEntry, root: &Path) -> EngineStatus {
             // ImageMagick is only safe to run with Recast's policy, and its presets
             // depend on the recorded capabilities.
             let magick_incomplete = entry.capabilities.as_deref() == Some("magick_formats") && {
-                let policy = rec.bins.get("magick").and_then(|b| dir.join(&b.rel).parent().map(|p| p.join(MAGICK_POLICY)));
+                let policy = rec
+                    .bins
+                    .get("magick")
+                    .and_then(|b| dir.join(&b.rel).parent().map(|p| p.join(MAGICK_POLICY)));
                 !dir.join(CAPS).is_file() || !policy.is_some_and(|p| p.is_file())
             };
-            if magick_incomplete || dir.join(DAMAGED).exists() || rec.bins.values().any(|b| !dir.join(&b.rel).is_file()) {
+            if magick_incomplete
+                || dir.join(DAMAGED).exists()
+                || rec.bins.values().any(|b| !dir.join(&b.rel).is_file())
+            {
                 EngineStatus::Damaged
             } else {
-                EngineStatus::Installed { update_available: rec.version != entry.version, version: rec.version }
+                EngineStatus::Installed {
+                    update_available: rec.version != entry.version,
+                    version: rec.version,
+                }
             }
         }
     }
@@ -255,7 +352,11 @@ pub fn read_status(entry: &EngineEntry, root: &Path) -> EngineStatus {
 /// Re-hash every bin; on mismatch mark the install Damaged.
 pub fn verify(entry: &EngineEntry, root: &Path) -> Result<bool, String> {
     let (dir, rec) = installed(entry, root).ok_or("not installed")?;
-    let ok = rec.bins.values().all(|b| sha256_file(&dir.join(&b.rel)).map(|h| h == b.sha256).unwrap_or(false));
+    let ok = rec.bins.values().all(|b| {
+        sha256_file(&dir.join(&b.rel))
+            .map(|h| h == b.sha256)
+            .unwrap_or(false)
+    });
     if ok {
         let _ = fs::remove_file(dir.join(DAMAGED));
     } else {
@@ -278,7 +379,9 @@ pub(crate) mod tests {
     use std::collections::BTreeMap;
 
     pub(crate) fn sevenzip() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bin").join("7z.exe")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("bin")
+            .join("7z.exe")
     }
 
     /// A zip holding tool/bin/tool.exe, built with the bundled 7z.exe.
@@ -293,7 +396,11 @@ pub(crate) mod tests {
             .arg(dir.join("pkg").join("*"))
             .output()
             .unwrap();
-        assert!(st.status.success(), "{}", String::from_utf8_lossy(&st.stdout));
+        assert!(
+            st.status.success(),
+            "{}",
+            String::from_utf8_lossy(&st.stdout)
+        );
         zip
     }
 
@@ -322,17 +429,41 @@ pub(crate) mod tests {
         let zip = make_archive(d.path());
         let e = entry(&zip, "1.0");
         let root = d.path().join("engines");
-        let fetcher = LocalFetcher { source: zip.clone() };
-        let ctx = InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: None };
+        let fetcher = LocalFetcher {
+            source: zip.clone(),
+        };
+        let ctx = InstallCtx {
+            root: &root,
+            sevenzip: &sevenzip(),
+            fetcher: &fetcher,
+            post_unpack: None,
+        };
         let mut seen = Vec::new();
         let rec = install(&e, &ctx, &mut |p| seen.push(p)).unwrap();
         assert_eq!(rec.bins["tool"].rel, r"tool\bin\tool.exe");
-        assert!(root.join("tool").join("1.0").join(r"tool\bin\tool.exe").is_file());
+        assert!(
+            root.join("tool")
+                .join("1.0")
+                .join(r"tool\bin\tool.exe")
+                .is_file()
+        );
         assert!(!root.join(".partial").join("tool").exists());
         assert!(seen.last().copied().unwrap_or(0.0) > 0.9);
-        assert_eq!(read_status(&e, &root), EngineStatus::Installed { version: "1.0".into(), update_available: false });
+        assert_eq!(
+            read_status(&e, &root),
+            EngineStatus::Installed {
+                version: "1.0".into(),
+                update_available: false
+            }
+        );
         let newer = entry(&zip, "2.0");
-        assert_eq!(read_status(&newer, &root), EngineStatus::Installed { version: "1.0".into(), update_available: true });
+        assert_eq!(
+            read_status(&newer, &root),
+            EngineStatus::Installed {
+                version: "1.0".into(),
+                update_available: true
+            }
+        );
     }
 
     #[test]
@@ -343,10 +474,23 @@ pub(crate) mod tests {
         e.sha256 = "0".repeat(64);
         let root = d.path().join("engines");
         let fetcher = LocalFetcher { source: zip };
-        let err = install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: None }, &mut |_| {}).unwrap_err();
+        let err = install(
+            &e,
+            &InstallCtx {
+                root: &root,
+                sevenzip: &sevenzip(),
+                fetcher: &fetcher,
+                post_unpack: None,
+            },
+            &mut |_| {},
+        )
+        .unwrap_err();
         assert!(err.contains("checksum"), "{err}");
         assert!(!root.join("tool").exists());
-        assert!(crate::fsutil::walk_files(&root).is_empty(), "the bad download must be deleted");
+        assert!(
+            crate::fsutil::walk_files(&root).is_empty(),
+            "the bad download must be deleted"
+        );
         assert_eq!(read_status(&e, &root), EngineStatus::NotInstalled);
     }
 
@@ -358,7 +502,19 @@ pub(crate) mod tests {
         e.check = vec!["tool".into(), "-v".into()];
         let root = d.path().join("engines");
         let fetcher = LocalFetcher { source: zip };
-        assert!(install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: None }, &mut |_| {}).is_err());
+        assert!(
+            install(
+                &e,
+                &InstallCtx {
+                    root: &root,
+                    sevenzip: &sevenzip(),
+                    fetcher: &fetcher,
+                    post_unpack: None
+                },
+                &mut |_| {}
+            )
+            .is_err()
+        );
         assert!(!root.join("tool").exists());
     }
 
@@ -369,9 +525,23 @@ pub(crate) mod tests {
         let e = entry(&zip, "1.0");
         let root = d.path().join("engines");
         let fetcher = LocalFetcher { source: zip };
-        install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: None }, &mut |_| {}).unwrap();
+        install(
+            &e,
+            &InstallCtx {
+                root: &root,
+                sevenzip: &sevenzip(),
+                fetcher: &fetcher,
+                post_unpack: None,
+            },
+            &mut |_| {},
+        )
+        .unwrap();
         assert!(verify(&e, &root).unwrap());
-        fs::write(root.join("tool").join("1.0").join(r"tool\bin\tool.exe"), b"tampered").unwrap();
+        fs::write(
+            root.join("tool").join("1.0").join(r"tool\bin\tool.exe"),
+            b"tampered",
+        )
+        .unwrap();
         assert!(!verify(&e, &root).unwrap());
         assert_eq!(read_status(&e, &root), EngineStatus::Damaged);
         remove(&e, &root).unwrap();
@@ -386,7 +556,17 @@ pub(crate) mod tests {
         e.size -= 1;
         let root = d.path().join("engines");
         let fetcher = LocalFetcher { source: zip };
-        let err = install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: None }, &mut |_| {}).unwrap_err();
+        let err = install(
+            &e,
+            &InstallCtx {
+                root: &root,
+                sevenzip: &sevenzip(),
+                fetcher: &fetcher,
+                post_unpack: None,
+            },
+            &mut |_| {},
+        )
+        .unwrap_err();
         assert!(err.contains("larger than expected"), "{err}");
         assert_eq!(read_status(&e, &root), EngineStatus::NotInstalled);
     }
@@ -404,7 +584,17 @@ pub(crate) mod tests {
             assert!(staging.join(&rec.bins["tool"].rel).is_file());
             fs::write(staging.join("hook.txt"), b"x").map_err(|e| e.to_string())
         };
-        install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: Some(&hook) }, &mut |_| {}).unwrap();
+        install(
+            &e,
+            &InstallCtx {
+                root: &root,
+                sevenzip: &sevenzip(),
+                fetcher: &fetcher,
+                post_unpack: Some(&hook),
+            },
+            &mut |_| {},
+        )
+        .unwrap();
         assert!(final_dir.join("hook.txt").is_file());
     }
 
@@ -415,8 +605,20 @@ pub(crate) mod tests {
         let e = entry(&zip, "1.0");
         let root = d.path().join("engines");
         let fetcher = LocalFetcher { source: zip };
-        let hook = |_: &EngineEntry, _: &Path, _: &InstallRecord| -> Result<(), String> { Err("no policy".into()) };
-        let err = install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: Some(&hook) }, &mut |_| {}).unwrap_err();
+        let hook = |_: &EngineEntry, _: &Path, _: &InstallRecord| -> Result<(), String> {
+            Err("no policy".into())
+        };
+        let err = install(
+            &e,
+            &InstallCtx {
+                root: &root,
+                sevenzip: &sevenzip(),
+                fetcher: &fetcher,
+                post_unpack: Some(&hook),
+            },
+            &mut |_| {},
+        )
+        .unwrap_err();
         assert_eq!(err, "no policy");
         assert!(!root.join("tool").exists());
         assert_eq!(read_status(&e, &root), EngineStatus::NotInstalled);
@@ -432,20 +634,45 @@ pub(crate) mod tests {
         let root = d.path().join("engines");
         let fetcher = LocalFetcher { source: zip };
         let hook = |_: &EngineEntry, staging: &Path, rec: &InstallRecord| -> Result<(), String> {
-            let exe_dir = staging.join(&rec.bins["magick"].rel).parent().unwrap().to_path_buf();
+            let exe_dir = staging
+                .join(&rec.bins["magick"].rel)
+                .parent()
+                .unwrap()
+                .to_path_buf();
             fs::write(exe_dir.join(MAGICK_POLICY), b"<policymap/>").unwrap();
             fs::write(staging.join(CAPS), b"[]").unwrap();
             Ok(())
         };
-        install(&e, &InstallCtx { root: &root, sevenzip: &sevenzip(), fetcher: &fetcher, post_unpack: Some(&hook) }, &mut |_| {}).unwrap();
-        let installed = EngineStatus::Installed { version: "1.0".into(), update_available: false };
+        install(
+            &e,
+            &InstallCtx {
+                root: &root,
+                sevenzip: &sevenzip(),
+                fetcher: &fetcher,
+                post_unpack: Some(&hook),
+            },
+            &mut |_| {},
+        )
+        .unwrap();
+        let installed = EngineStatus::Installed {
+            version: "1.0".into(),
+            update_available: false,
+        };
         assert_eq!(read_status(&e, &root), installed);
         let dir = root.join("tool").join("1.0");
         let policy = dir.join(r"tool\bin").join(MAGICK_POLICY);
         fs::rename(dir.join(CAPS), dir.join("caps.bak")).unwrap();
-        assert_eq!(read_status(&e, &root), EngineStatus::Damaged, "caps missing");
+        assert_eq!(
+            read_status(&e, &root),
+            EngineStatus::Damaged,
+            "caps missing"
+        );
         fs::rename(dir.join("caps.bak"), dir.join(CAPS)).unwrap();
         fs::remove_file(&policy).unwrap();
-        assert_eq!(read_status(&e, &root), EngineStatus::Damaged, "policy missing");
+        assert_eq!(
+            read_status(&e, &root),
+            EngineStatus::Damaged,
+            "policy missing"
+        );
     }
 }
