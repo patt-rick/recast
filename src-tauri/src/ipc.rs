@@ -114,6 +114,24 @@ pub async fn inspect(state: State<'_, AppState>, paths: Vec<String>) -> Result<P
     .await
 }
 
+/// Thumbnail bytes for a file a recent `inspect` returned (empty: show the glyph).
+#[tauri::command]
+pub async fn thumbnail(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
+    let (engines, recent) = (state.engines.clone(), state.recent.clone());
+    let bytes = blocking(move || {
+        let p = std::path::absolute(&path).map_err(|e| e.to_string())?;
+        if !lock(&recent).contains(&p) {
+            return Err("That file wasn't dropped on Recast.".to_string());
+        }
+        Ok(crate::thumbs::make(&engines, &p).unwrap_or_default())
+    })
+    .await?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 #[tauri::command]
 pub async fn start_jobs(
     state: State<'_, AppState>,

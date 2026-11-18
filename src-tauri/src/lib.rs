@@ -14,6 +14,7 @@ pub mod platform;
 pub mod presets;
 pub mod proc;
 pub mod settings;
+pub mod thumbs;
 pub mod tray;
 
 #[cfg(test)]
@@ -47,6 +48,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             ipc::inspect,
+            ipc::thumbnail,
             ipc::start_jobs,
             ipc::cancel_job,
             ipc::retry_job,
