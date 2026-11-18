@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Companion window permissions",
-  "windows": ["companion"],
-  "permissions": ["core:default", "opener:allow-open-url", "opener:allow-default-urls"]
+  "description": "Companion and pad window permissions",
+  "windows": ["companion", "pad"],
+  "permissions": ["core:default", "opener:allow-open-url", "opener:allow-default-urls", "dialog:allow-open"]
 }

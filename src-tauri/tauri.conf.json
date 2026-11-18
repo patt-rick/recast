@@ -20,9 +20,25 @@
         "minHeight": 420,
         "visible": true,
         "dragDropEnabled": true
+      },
+      {
+        "label": "pad",
+        "title": "Recast pad",
+        "url": "pad.html",
+        "width": 440,
+        "height": 440,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "dragDropEnabled": true
       }
     ],
-    "security": { "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'" }
+    "security": { "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'" }
   },
   "bundle": {
     "active": true,
