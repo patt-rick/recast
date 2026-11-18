@@ -3,7 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ipc, onJobEvent } from "../shared/ipc";
 import { formatBytes, formatEta } from "../shared/format";
 import type { JobEvent, JobRecord, PadModel } from "../shared/types";
-import { applyEvent, empty, remove, seed, split, withRecord, type JobsState, type JobView } from "./jobs";
+import { applyEvent, batchSuffix, empty, remove, seed, split, withRecord, type JobsState, type JobView } from "./jobs";
 
 type Action =
   | { type: "seed"; records: JobRecord[] }
@@ -202,6 +202,18 @@ function statusLine(j: JobView): string {
 function JobRow({ job: j, dispatch, report }: { job: JobView; dispatch: Dispatch<Action>; report: (e: unknown) => void }) {
   const [open, setOpen] = useState(false);
   const running = j.status === "queued" || j.status === "waiting_engine" || j.status === "running";
+  const [retrying, setRetrying] = useState(false);
+  const retry = async (fallback?: boolean) => {
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await ipc.retryJob(j.id, fallback);
+    } catch (e) {
+      report(e);
+    } finally {
+      setRetrying(false);
+    }
+  };
   const removeRow = () => ipc.removeJob(j.id).then(() => dispatch({ type: "remove", id: j.id }), report);
   return (
     <li className={`job ${j.status}`}>
@@ -209,7 +221,7 @@ function JobRow({ job: j, dispatch, report }: { job: JobView; dispatch: Dispatch
         <div className="job-title">
           <strong>{j.file}</strong> <span className="muted">→ {j.presetLabel}</span>
         </div>
-        <div className="job-status">{statusLine(j)}</div>
+        <div className="job-status">{statusLine(j) + batchSuffix(j)}</div>
         {running && (
           <div className={j.pct == null ? "bar indeterminate" : "bar"} role="progressbar" aria-label={`${j.file} progress`} aria-valuenow={j.pct == null ? undefined : Math.round(j.pct * 100)}>
             <div style={{ width: `${Math.round((j.pct ?? 0) * 100)}%` }} />
@@ -228,10 +240,10 @@ function JobRow({ job: j, dispatch, report }: { job: JobView; dispatch: Dispatch
           </>
         )}
         {j.status === "failed" && (j.error?.code === "DEST_UNWRITABLE" || j.error?.code === "DEST_LOCKED") && (
-          <button onClick={() => ipc.retryJob(j.id, true).catch(report)}>Save to fallback folder</button>
+          <button disabled={retrying} onClick={() => retry(true)}>Save to fallback folder</button>
         )}
         {(j.status === "failed" || j.status === "cancelled" || j.status === "interrupted") && (
-          <button onClick={() => ipc.retryJob(j.id).catch(report)}>Retry</button>
+          <button disabled={retrying} onClick={() => retry()}>Retry</button>
         )}
         {j.status === "failed" && <button onClick={() => setOpen(!open)}>{open ? "Hide details" : "Details"}</button>}
         {!running && (

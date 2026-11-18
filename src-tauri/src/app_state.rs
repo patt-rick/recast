@@ -64,6 +64,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         Box::new(HttpFetcher),
     ));
     let handle = app.handle().clone();
+    let dedupe = Mutex::new(FailureNotices::default());
     engines.set_listener(Arc::new(move |e: EngineEvent| {
         let event = match &e {
             EngineEvent::Progress { .. } => "engine://progress",
@@ -71,7 +72,9 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             EngineEvent::Failed { .. } => "engine://failed",
         };
         let _ = handle.emit(event, &e);
-        if let EngineEvent::Failed { id, error } = &e {
+        if let EngineEvent::Failed { id, error } = &e
+            && lock(&dedupe).should_notify(id, error, std::time::Instant::now())
+        {
             let name = engine_names.get(id).unwrap_or(id);
             if let Err(err) = handle
                 .notification()
@@ -127,6 +130,30 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Decides which engine failures deserve a notification: never the "busy" refusal,
+/// and at most one per engine per minute.
+#[derive(Default)]
+struct FailureNotices {
+    last: HashMap<String, std::time::Instant>,
+}
+
+impl FailureNotices {
+    const WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+    fn should_notify(&mut self, id: &str, error: &str, at: std::time::Instant) -> bool {
+        if error == crate::engines::ENGINE_BUSY {
+            return false;
+        }
+        if let Some(prev) = self.last.get(id)
+            && at.saturating_duration_since(*prev) < Self::WINDOW
+        {
+            return false;
+        }
+        self.last.insert(id.to_string(), at);
+        true
+    }
+}
+
 /// A job temp dir is always named `.recast-<job id>`.
 fn is_recast_temp(p: &Path) -> bool {
     p.file_name()
@@ -136,6 +163,18 @@ fn is_recast_temp(p: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_notices_skip_busy_and_dedupe_per_engine() {
+        use std::time::{Duration, Instant};
+        let mut n = FailureNotices::default();
+        let t0 = Instant::now();
+        assert!(!n.should_notify("ffmpeg", crate::engines::ENGINE_BUSY, t0));
+        assert!(n.should_notify("ffmpeg", "boom", t0));
+        assert!(!n.should_notify("ffmpeg", "boom", t0 + Duration::from_secs(59)));
+        assert!(n.should_notify("pandoc", "boom", t0 + Duration::from_secs(1)));
+        assert!(n.should_notify("ffmpeg", "boom", t0 + Duration::from_secs(61)));
+    }
 
     #[test]
     fn recovery_only_deletes_recast_temp_dirs() {

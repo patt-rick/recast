@@ -175,7 +175,7 @@ pub async fn engines_list(state: State<'_, AppState>) -> Result<Vec<EngineRow>, 
 }
 
 #[tauri::command]
-pub fn engine_install(state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub async fn engine_install(state: State<'_, AppState>, id: String) -> Result<(), String> {
     // An early answer for the common case; Engines::install itself refuses (and emits
     // engine://failed) if a conversion takes the engine in the meantime.
     if state.engines.in_use(&id) {

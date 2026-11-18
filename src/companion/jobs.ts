@@ -5,6 +5,7 @@ export interface JobView {
   id: string;
   /** Jobs dropped together; unknown for rows loaded from history. */
   batchId: string | null;
+  batchSize: number | null;
   presetId: string;
   presetLabel: string;
   file: string;
@@ -29,6 +30,7 @@ export function fromRecord(r: JobRecord): JobView {
   return {
     id: r.id,
     batchId: null,
+    batchSize: null,
     presetId: r.preset_id,
     presetLabel: r.preset_label,
     file: r.inputs.length > 1 ? `${first} +${r.inputs.length - 1}` : first,
@@ -63,6 +65,7 @@ export function applyEvent(s: JobsState, e: JobEvent): JobsState {
   const next: JobView = {
     id: e.job_id,
     batchId: e.batch_id,
+    batchSize: e.batch_size,
     presetId: e.preset_id,
     presetLabel: e.preset_label,
     file: e.file,
@@ -86,6 +89,11 @@ export function remove(s: JobsState, id: string): JobsState {
   const byId = { ...s.byId };
   delete byId[id];
   return { order: s.order.filter((x) => x !== id), byId };
+}
+
+/** " · batch of N" for an active job dropped with others; empty otherwise. */
+export function batchSuffix(j: JobView): string {
+  return ACTIVE.includes(j.status) && j.batchSize != null && j.batchSize > 1 ? ` · batch of ${j.batchSize}` : "";
 }
 
 export function split(s: JobsState): { active: JobView[]; history: JobView[] } {

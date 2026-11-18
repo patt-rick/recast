@@ -267,7 +267,7 @@ EPUB, DOCX, HTML (`--standalone --embed-resources`, so images are inlined), Mark
   - **Resume cache:** the downloaded or partly downloaded archive stays in `engines\.partial\<id>\`, so the next attempt resumes instead of starting again. A checksum mismatch deletes it.
   - **Idle timeout:** HTTP reads time out after 60 s without data. A stalled connection fails the install; it doesn't hang.
   - **Post-unpack hook:** engine-specific files are written into the staging folder before the rename. If the hook fails, nothing is installed.
-  - **Engine leases:** a job takes a shared lease on its engine after `ensure` and holds it until the job ends. Download, Update, Repair and Remove need exclusive access and are refused ("A conversion is using this converter…") while any lease is held. A job that must repair a Damaged engine waits for running conversions instead.
+  - **Engine leases:** a job takes a shared lease on its engine after `ensure` and holds it until the job ends. Download, Update, Repair and Remove need exclusive access and are refused ("A conversion is using this converter…") while any lease is held. A job that must repair a Damaged engine waits for running conversions instead. Likewise, a job whose engine is being updated or repaired from Library waits with status `waiting_engine` (no percentage) until the engine is free.
   - **Cancelling:** cancelling a job that is waiting for an engine download ends the job at once. The download itself continues for later jobs.
 - **7-Zip:** Recast ships the full **7-Zip 26.06** `7z.exe` and `7z.dll` (LGPL-2.1 + BSD-3 + the unRAR restriction), not the standalone `7za`, because only the full build can unpack NSIS installers. It is used for **every** engine archive (zip, 7z, NSIS), so no Rust zip crate is needed. The files are pinned by SHA-256 in `scripts/fetch-7zip.mjs`. Unpacking has a 10-minute cap.
 - **Ghostscript (`nsis`):** the free AGPL installer no longer supports silent install (removed in 10.01.0), and running it would show UI and possibly a UAC prompt. Recast **never runs it**. It unpacks the NSIS payload with the bundled 7-Zip, then runs `gswin64c -v` (`check`) from the unpacked folder as an install check. Before a Ghostscript version is pinned, CI verifies that `gswin64c` converts a test PDF when run from an arbitrary folder with no registry entries. Recast doesn't re-host Ghostscript; it downloads the upstream installer.
@@ -283,17 +283,17 @@ EPUB, DOCX, HTML (`--standalone --embed-resources`, so images are inlined), Mark
   - Ghostscript: gs w64 installer, unpacked but never run (see above)
 
 ### 6.4 `jobs`
-- **Queue:** FIFO. Concurrency comes from settings (default 2). Multi-file presets count as one job. Batch progress ("n/total files") is shown per job in Activity.
+- **Queue:** FIFO. Concurrency comes from settings (default 2). Multi-file presets count as one job. While a job from a batch of 2 or more is active, its status line in Activity ends with " · batch of N" (N = the number of jobs dropped together). It does not show a position within the batch.
 - **Working directory and paths:** engines run with the job's temp dir (below) as their working directory. `{out}` and `{out_dir}` expand to the *relative* names `out.<ext>` and `out`. Inputs of presets with `stage_inputs` (ImageMagick, Ghostscript) are staged into the temp dir as `in-1.<ext>`, `in-2.<ext>`, … by hard link, or by copy across volumes. That keeps `%`, `[ ]`, a leading `-`, Unicode and paths over 260 characters safe for the two engines that interpret filenames. Other engines get absolute input paths (§6.2).
 - **Process control:** each job's process runs inside a Windows **Job Object** with `KILL_ON_JOB_CLOSE`. Processes (jobs, captures, 7-Zip) are created **suspended**, put in the Job Object, then resumed, so no grandchild can start outside the kill group. Cancelling, the watchdog, or Recast crashing therefore kills the **entire process tree**. Pipe-reader threads are joined for at most 2 s, then detached. stdout and stderr are both drained continuously, which prevents pipe-full deadlocks; the last 30 stderr lines are kept for Details.
 - **Progress:**
   - `ffmpeg`: `-progress pipe:1 -nostats`, giving `out_time_us / duration`. Two-pass jobs report 0–50% for pass 1 and 50–100% for pass 2.
   - `ghostscript_pages`: the "Page N" lines against the page count from Ghostscript's own "Processing pages 1 through N" line, so Compress needs no second engine.
-  - `none`: indeterminate. Batches report n/total files.
+  - `none`: indeterminate.
 - **Watchdog:** for engines that report progress, no progress line for **{stall_timeout} s** (60) marks the job **Stalled** and kills it. For ffmpeg the stall timer runs only between the first real output timestamp and 99% of the duration; before and after that (GIF palettegen, `+faststart`) only the per-file hard cap applies. For `none` engines, there's a hard cap of 10 min per file, configurable.
 - **Atomic output:** every job gets a hidden temp directory `<dest>\.recast-<job>\` on the same volume. File outputs, folder outputs (To images, Split) and two-pass logs all go inside it. On success, the output file or folder is renamed to its final name, with the collision check repeated at rename time, and the temp dir is removed. On failure or cancel, the whole temp dir is deleted. If the destination path is too long for an engine's working directory (240 characters or more), the temp dir goes in Recast's scratch folder instead, provided that's on the same volume; otherwise the job fails with `DEST_UNWRITABLE` and a short explanation. Temp paths are recorded in `history` before spawning, so leftovers are deleted on the next launch.
 - **Rename retries:** antivirus, OneDrive and Dropbox often lock new files briefly, so a sharing violation on rename is retried with backoff (100 ms, doubling, up to 5 s in total) before the job fails with `DEST_LOCKED`.
-- **Events:** `job://queued|progress|done|failed|cancelled`, all carrying `{ job_id, preset_id, file, pct?, eta_s?, out_path?, error? }`.
+- **Events:** `job://queued|progress|done|failed|cancelled`, all carrying `{ job_id, batch_id, batch_size, preset_id, preset_label, file, pct?, eta_s?, out_path?, error? }`.
 
 ### 6.5 `history`
 - SQLite at `%LOCALAPPDATA%\Recast\recast.db`, via `rusqlite`.
@@ -391,7 +391,7 @@ Still to come: `src-tauri/windows/hooks.nsh` (`NSIS_HOOK_POSTUNINSTALL`, section
 | Situation | Behaviour |
 |---|---|
 | **Engine not installed** | The segment shows a download badge. Dropping on it queues the job as *Waiting for engine*, installs the engine (pad ring: "Getting FFmpeg · 84 MB"), then runs the job. If the install fails, the job fails with `ENGINE_INSTALL_FAILED`. |
-| **Download or checksum failure** | The partial download is deleted and nothing is executed. Notification with **Retry**; Library shows the error. |
+| **Download or checksum failure** | A checksum mismatch deletes the download; a network failure keeps the partial file so the next attempt resumes. Nothing is executed. The job fails with `ENGINE_INSTALL_FAILED` and a notification is shown; Library shows the error. (The Retry button arrives with Plan 3.) |
 | **Engine exits non-zero** | `ENGINE_FAILED`. A plain-language reason is mapped from known stderr patterns (unsupported codec, corrupt input, encrypted PDF, …) and falls back to "The converter reported an error". The stderr tail is in Details. |
 | **Stalled** | `STALLED`: killed by the watchdog and the temp file deleted. Details suggest Retry. |
 | **Source missing, locked or unreadable** | `SOURCE_UNREADABLE`, checked before spawning. |

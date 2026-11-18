@@ -1,5 +1,5 @@
 import type { JobEvent, JobRecord } from "../shared/types";
-import { applyEvent, empty, remove, seed, split, withRecord } from "./jobs";
+import { applyEvent, batchSuffix, empty, remove, seed, split, withRecord } from "./jobs";
 
 const ev = (over: Partial<JobEvent>): JobEvent => ({
   job_id: "j1", batch_id: "b", batch_size: 1, preset_id: "video-mp3", preset_label: "MP3", file: "holiday.mov",
@@ -47,6 +47,17 @@ test("a batch lists in drop order, below newer batches and above older jobs", ()
   s = applyEvent(s, ev({ job_id: "x", batch_id: "b2", file: "x.mov" }));
   s = applyEvent(s, ev({ job_id: "y", batch_id: "b2", batch_size: 2, file: "y.mov" }));
   expect(s.order).toEqual(["x", "y", "a", "b", "c", "old"]);
+});
+
+test("batch suffix shows only for active jobs in a batch of 2 or more", () => {
+  let s = applyEvent(empty, ev({ job_id: "a", batch_size: 3, status: "running" }));
+  s = applyEvent(s, ev({ job_id: "b", batch_size: 1, status: "running" }));
+  s = applyEvent(s, ev({ job_id: "c", batch_size: 3, status: "done" }));
+  s = seed(s, [rec({ id: "h" })]);
+  expect(batchSuffix(s.byId.a)).toBe(" · batch of 3");
+  expect(batchSuffix(s.byId.b)).toBe("");
+  expect(batchSuffix(s.byId.c)).toBe("");
+  expect(batchSuffix(s.byId.h)).toBe("");
 });
 
 test("split separates active jobs from history", () => {
