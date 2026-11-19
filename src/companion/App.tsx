@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Activity } from "./Activity";
-import { onNavigate, onOpenFiles } from "../shared/ipc";
+import { ipc, onNavigate, onOpenFiles } from "../shared/ipc";
+import type { DeepPartial, Settings } from "../shared/types";
 import { router } from "./dragRouter";
 import { Library } from "./Library";
 import { SettingsView } from "./Settings";
 import { Tools } from "./Tools";
+import { Welcome } from "./Welcome";
 
 const SECTIONS = [
   { id: "activity", label: "Activity" },
@@ -22,6 +24,18 @@ export function App() {
   const [focusJob, setFocusJob] = useState<{ id: string; n: number } | null>(null);
 
   const [incoming, setIncoming] = useState<{ paths: string[]; n: number } | null>(null);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [welcomeClosed, setWelcomeClosed] = useState(false);
+
+  useEffect(() => {
+    ipc.getSettings().then(setSettings).catch((e) => setSettingsError(String(e)));
+  }, []);
+  const save = useCallback(
+    (patch: DeepPartial<Settings>) => ipc.setSettings(patch).then(setSettings, (e) => setSettingsError(String(e))),
+    [],
+  );
+
   // The pad's "Open in Recast" hands over a mixed set of files for Activity to group.
   useEffect(() => {
     const off = onOpenFiles((paths) => {
@@ -89,8 +103,11 @@ export function App() {
         <Library />
       </main>
       <main className="content" hidden={section !== "settings"}>
-        <SettingsView />
+        <SettingsView s={settings} error={settingsError} save={save} />
       </main>
+      {settings && !settings.app.first_run_done && !welcomeClosed && (
+        <Welcome s={settings} save={save} onDone={() => setWelcomeClosed(true)} />
+      )}
     </div>
   );
 }

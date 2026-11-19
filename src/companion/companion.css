@@ -93,3 +93,11 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: 
 .groups li { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .groups li > span { min-width: 0; overflow-wrap: anywhere; }
 .groups button:disabled { opacity: 0.45; cursor: default; }
+
+.field.toggle { grid-template-columns: 1fr auto; }
+.field.toggle small { display: block; font-size: 12px; }
+.welcome-overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.4); z-index: 20; }
+.welcome { width: min(460px, calc(100vw - 32px)); padding: 24px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3); }
+.welcome h2 { font-size: 18px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 4px 0 10px; }
+.welcome p { margin: 0 0 12px; }
+.welcome-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }

@@ -1,23 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { ipc } from "../shared/ipc";
 import type { DeepPartial, Settings } from "../shared/types";
 
-export function SettingsView() {
-  const [s, setS] = useState<Settings | null>(null);
-  const [error, setError] = useState<string | null>(null);
+type Save = (p: DeepPartial<Settings>) => Promise<unknown>;
 
-  useEffect(() => {
-    ipc.getSettings().then(setS).catch((e) => setError(String(e)));
-  }, []);
-
-  const save = (patch: DeepPartial<Settings>) =>
-    ipc.setSettings(patch).then(setS).catch((e) => setError(String(e)));
-
+export function SettingsView({ s, error, save }: { s: Settings | null; error: string | null; save: Save }) {
   if (!s) return <p className="muted">{error ?? "Loading…"}</p>;
 
   return (
     <section aria-label="Settings">
       {error && <p className="error" role="alert">{error}</p>}
+
+      <h2>Opening the pad</h2>
+      <TriggerFields s={s} save={save} />
 
       <h2>Output</h2>
       <Field label="Save converted files">
@@ -78,7 +72,56 @@ export function SettingsView() {
       <Field label="Stop a stuck job after (seconds)">
         <NumberInput value={s.jobs.stall_timeout_s} min={10} max={3600} onCommit={(v) => save({ jobs: { stall_timeout_s: v } })} />
       </Field>
+
+      <h2>Windows</h2>
+      <Toggle label="“Open with Recast” in Explorer" hint="Right-click files, then Show more options."
+        checked={s.shell.explorer_entry} onChange={(v) => save({ shell: { explorer_entry: v } })} />
+      <Toggle label="Start with Windows" hint="Recast waits in the tray, ready for a drop."
+        checked={s.app.start_with_windows} onChange={(v) => save({ app: { start_with_windows: v } })} />
+      <p className="muted">Drags from apps running as administrator can't reach Recast; Windows blocks them.</p>
     </section>
+  );
+}
+
+export function TriggerFields({ s, save }: { s: Settings; save: Save }) {
+  const t = s.triggers;
+  return (
+    <>
+      <Toggle label="Edge handle" hint="A thin tab on the screen edge. Drag a file onto it to open the pad."
+        checked={t.edge_handle} onChange={(v) => save({ triggers: { edge_handle: v } })} />
+      {t.edge_handle && (
+        <>
+          <Field label="Edge">
+            <select value={t.edge} onChange={(e) => save({ triggers: { edge: e.target.value as Settings["triggers"]["edge"] } })}>
+              <option value="left">Left</option>
+              <option value="right">Right</option>
+              <option value="top">Top</option>
+              <option value="bottom">Bottom</option>
+            </select>
+          </Field>
+          <Field label={`Position along the edge (${Math.round(t.edge_pos * 100)}%)`}>
+            <input type="range" min={0} max={100} step={5} value={Math.round(t.edge_pos * 100)}
+              onChange={(e) => save({ triggers: { edge_pos: Number(e.target.value) / 100 } })} />
+          </Field>
+        </>
+      )}
+      <Toggle label="Desk pad" hint="A round pad on your desktop that you can drop files on. Drag it to move it."
+        checked={t.desk_pad} onChange={(v) => save({ triggers: { desk_pad: v } })} />
+      <Toggle label="Shake to open" hint="Shake a file quickly left and right while you drag it. Off while a fullscreen app is in front."
+        checked={t.shake} onChange={(v) => save({ triggers: { shake: v } })} />
+    </>
+  );
+}
+
+function Toggle({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="field toggle">
+      <span>
+        {label}
+        {hint && <small className="muted">{hint}</small>}
+      </span>
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    </label>
   );
 }
 
