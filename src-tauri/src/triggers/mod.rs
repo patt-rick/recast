@@ -3,8 +3,8 @@ pub mod geometry;
 pub mod shake;
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, DragDropEvent, Emitter, Manager, PhysicalPosition, PhysicalSize};
 
@@ -21,7 +21,16 @@ pub const DESK: &str = "deskpad";
 #[derive(Default)]
 pub struct TriggerState {
     inner: Mutex<Inner>,
-    desk_save: AtomicU64,
+    desk_save: Mutex<DeskSave>,
+}
+
+/// The debounced save of the desk pad's dragged position: one thread waits, however many
+/// `Moved` events arrive (same pattern as `shell::forward`).
+#[derive(Default)]
+struct DeskSave {
+    waiting: bool,
+    due: Option<Instant>,
+    pos: (i32, i32),
 }
 
 #[derive(Default)]
@@ -49,8 +58,10 @@ fn settings(app: &AppHandle) -> Settings {
 pub fn init(app: &AppHandle) {
     app.manage(TriggerState::default());
     // The handle must be thinner than a captioned window may be (see `strip_caption`).
-    if let Some(h) = app.get_webview_window(HANDLE).and_then(|w| w.hwnd().ok()) {
-        platform::strip_caption(h.0 as isize);
+    for label in [HANDLE, DESK] {
+        if let Some(h) = app.get_webview_window(label).and_then(|w| w.hwnd().ok()) {
+            platform::strip_caption(h.0 as isize);
+        }
     }
     sync(app);
     let h = app.clone();
@@ -106,6 +117,30 @@ fn desk_work(app: &AppHandle, s: &Settings) -> Option<(Rect, f64)> {
     saved.map(|m| rect_of(&m)).or_else(|| primary_work(app))
 }
 
+fn abe(edge: Edge) -> u32 {
+    match edge {
+        Edge::Left => 0,
+        Edge::Top => 1,
+        Edge::Right => 2,
+        Edge::Bottom => 3,
+    }
+}
+
+/// Stand the handle off `edge` when an auto-hide taskbar lives there (it would otherwise
+/// sit on the bar's reveal strip).
+fn handle_inset(app: &AppHandle, edge: Edge) -> i32 {
+    let Some(m) = app.primary_monitor().ok().flatten() else {
+        return 0;
+    };
+    let (p, z) = (m.position(), m.size());
+    let ltrb = [p.x, p.y, p.x + z.width as i32, p.y + z.height as i32];
+    if platform::autohide_bar_on(abe(edge), ltrb) {
+        geometry::AUTOHIDE_INSET
+    } else {
+        0
+    }
+}
+
 fn place_handle(app: &AppHandle, s: &Settings) {
     static LOGGED: AtomicBool = AtomicBool::new(false);
     let (Some(w), Some((work, scale))) = (app.get_webview_window(HANDLE), primary_work(app)) else {
@@ -118,11 +153,8 @@ fn place_handle(app: &AppHandle, s: &Settings) {
         i.highlighted
     };
     let edge = Edge::parse(&s.triggers.edge);
-    let r = if grown {
-        geometry::handle_rect_highlighted(edge, s.triggers.edge_pos, work, scale)
-    } else {
-        geometry::handle_rect(edge, s.triggers.edge_pos, work, scale)
-    };
+    let inset = handle_inset(app, edge);
+    let r = geometry::handle_window(edge, s.triggers.edge_pos, work, scale, grown, inset);
     let _ = w.set_position(PhysicalPosition::new(r.x, r.y));
     let _ = w.set_size(PhysicalSize::new(r.w as u32, r.h as u32));
     if !LOGGED.swap(true, Ordering::Relaxed) {
@@ -154,6 +186,13 @@ fn place_desk(app: &AppHandle, s: &Settings) {
     }
     let _ = w.set_position(PhysicalPosition::new(x, y));
     let _ = w.set_size(PhysicalSize::new(size, size));
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::Relaxed) {
+        log::info!(
+            "triggers: desk pad placed at ({x}, {y}) asked {size}x{size}, window is {:?} at scale {scale}",
+            w.outer_size().ok().map(|s| (s.width, s.height)),
+        );
+    }
 }
 
 /// Show without activating, or hide, a widget window. Like the pad (§6.7), shown behind
@@ -196,6 +235,16 @@ fn fullscreen_on(primary_only: bool) -> bool {
     })
 }
 
+/// A widget needs re-placing: it is in use, and the work area or scale it was placed
+/// for differs from the current one (B12). `now` None (no monitor info) changes nothing.
+fn layout_changed(
+    enabled: bool,
+    placed_for: Option<(Rect, f64)>,
+    now: Option<(Rect, f64)>,
+) -> bool {
+    enabled && now.is_some_and(|l| placed_for != Some(l))
+}
+
 /// Foreground change or the 1 s timer (watcher thread): read the foreground window here,
 /// then do the rest on the main thread: auto-hide the handle over fullscreen apps, and
 /// re-place the widgets when the screen layout or scale changed (B12).
@@ -212,9 +261,8 @@ fn tick(app: &AppHandle) {
             i.fullscreen = full;
             (
                 changed,
-                primary_work(&app).is_some_and(|l| i.handle_layout != Some(l)),
-                s.triggers.desk_pad
-                    && desk_work(&app, &s).is_some_and(|l| i.desk_layout != Some(l)),
+                layout_changed(true, i.handle_layout, primary_work(&app)),
+                layout_changed(s.triggers.desk_pad, i.desk_layout, desk_work(&app, &s)),
             )
         };
         if handle_stale {
@@ -235,14 +283,18 @@ fn tick(app: &AppHandle) {
 /// the state lock, so concurrent calls end in the right state (B11).
 fn set_shake(app: &AppHandle) {
     let st = app.state::<TriggerState>();
-    let stopped = {
+    {
         let mut i = lock(&st.inner);
         let on = settings(app).triggers.shake;
         if on == i.hook.is_some() {
             return;
         }
         if !on {
-            i.hook.take()
+            // Dropping unhooks and joins the hook and worker threads. Under the lock on
+            // purpose: a concurrent start must not begin until the old hook is gone.
+            // Nothing on the hook or worker path takes this lock, and the worker only
+            // queues work for the main thread, so the join cannot deadlock.
+            i.hook = None;
         } else {
             let app = app.clone();
             let mut det = shake::Detector::default();
@@ -266,17 +318,18 @@ fn set_shake(app: &AppHandle) {
                 Ok(h) => i.hook = Some(h),
                 Err(e) => log::warn!("shake: mouse hook failed: {e}"),
             }
-            None
         }
-    };
-    // Dropping unhooks and joins the hook and worker threads: not under the lock.
-    drop(stopped);
+    }
 }
 
 /// Runs on the hook's worker thread, never in the hook callback itself.
 fn on_shake(app: &AppHandle) {
     // A shake while a pad is still waiting for its drop is the same drag; any other open
     // pad is replaced by the probe (B14, spec §4.3).
+    // The button went up while the event was queued: not a drag any more.
+    if !platform::any_button_down() {
+        return;
+    }
     if pad::is_waiting_for_drop(app) || fullscreen_on(false) {
         return;
     }
@@ -284,25 +337,35 @@ fn on_shake(app: &AppHandle) {
     pad::open_probe(app);
 }
 
-/// Where the pad goes for a drag over a widget: beside the handle, over the desk pad.
+/// Where the pad goes for a drag over a widget: beside the handle's tab (not its grown
+/// window), centred on the desk pad.
 fn anchor_for(w: &tauri::Window) -> Option<(i32, i32)> {
-    let (pos, size, scale) = (
-        w.outer_position().ok()?,
-        w.outer_size().ok()?,
-        w.scale_factor().ok()?,
-    );
-    let r = Rect {
-        x: pos.x,
-        y: pos.y,
-        w: size.width as i32,
-        h: size.height as i32,
-    };
+    let app = w.app_handle();
+    let scale = w.scale_factor().ok()?;
     if w.label() == HANDLE {
-        let edge = Edge::parse(&settings(w.app_handle()).triggers.edge);
+        let (work, _) = primary_work(app)?;
+        let s = settings(app);
+        let edge = Edge::parse(&s.triggers.edge);
         let pad_px = (pad::SIZE * scale).round() as i32;
-        Some(geometry::pad_anchor_beside(edge, r, pad_px, scale))
+        Some(geometry::handle_pad_anchor(
+            edge,
+            s.triggers.edge_pos,
+            work,
+            scale,
+            handle_inset(app, edge),
+            pad_px,
+        ))
     } else {
-        Some(r.centre())
+        let (pos, size) = (w.outer_position().ok()?, w.outer_size().ok()?);
+        Some(
+            Rect {
+                x: pos.x,
+                y: pos.y,
+                w: size.width as i32,
+                h: size.height as i32,
+            }
+            .centre(),
+        )
     }
 }
 
@@ -311,6 +374,19 @@ fn strings(paths: &[std::path::PathBuf]) -> Vec<String> {
         .iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect()
+}
+
+/// The mode of the pad a drag event should open, or None for no pad: entering opens a
+/// drag-mode pad unless one is already open for these files; dropping opens click mode.
+/// Text, links and virtual items carry no paths and open nothing (§4.1).
+fn drag_pad_mode(entering: bool, paths: &[String], already_open: bool) -> Option<PadMode> {
+    if paths.is_empty() {
+        None
+    } else if entering {
+        (!already_open).then_some(PadMode::Drag)
+    } else {
+        Some(PadMode::Click)
+    }
 }
 
 /// Drag-drop on the handle or desk pad (spec §4.1): entering opens a drag-mode pad for
@@ -325,15 +401,16 @@ pub fn on_drag(w: &tauri::Window, ev: &DragDropEvent) {
                 return; // text, links, virtual items (§4.1)
             }
             let _ = app.emit_to(&label, "widget://hover", true);
-            if !pad::is_open_with(app, &paths) {
-                pad::open_at(app, paths, PadMode::Drag, anchor_for(w));
+            let open = pad::is_open_with(app, &paths);
+            if let Some(mode) = drag_pad_mode(true, &paths, open) {
+                pad::open_at(app, paths, mode, anchor_for(w));
             }
         }
         DragDropEvent::Drop { paths, .. } => {
             let _ = app.emit_to(&label, "widget://hover", false);
             let paths = strings(paths);
-            if !paths.is_empty() {
-                pad::open_at(app, paths, PadMode::Click, anchor_for(w));
+            if let Some(mode) = drag_pad_mode(false, &paths, false) {
+                pad::open_at(app, paths, mode, anchor_for(w));
             }
         }
         DragDropEvent::Leave => {
@@ -343,37 +420,71 @@ pub fn on_drag(w: &tauri::Window, ev: &DragDropEvent) {
     }
 }
 
-/// A `Moved` event that merely reports where `place_desk` put the window is not the
-/// user dragging it (L8).
-fn is_programmatic_move(placed: Option<(i32, i32)>, pos: (i32, i32)) -> bool {
-    placed == Some(pos)
+/// A `Moved` event is the user dragging the desk pad only if it is not the position
+/// `place_desk` just set (L8) and a mouse button is down; Windows moving the window itself
+/// (monitor unplugged, DPI change) must not be saved.
+fn is_user_drag(placed: Option<(i32, i32)>, pos: (i32, i32), button_down: bool) -> bool {
+    button_down && placed != Some(pos)
 }
 
 /// The desk pad was dragged: remember where, 500 ms after it stops.
 pub fn desk_moved(app: &AppHandle, pos: PhysicalPosition<i32>) {
     let st = app.state::<TriggerState>();
-    if is_programmatic_move(lock(&st.inner).desk_placed, (pos.x, pos.y)) {
+    if !is_user_drag(
+        lock(&st.inner).desk_placed,
+        (pos.x, pos.y),
+        platform::any_button_down(),
+    ) {
         return;
     }
-    let mine = st.desk_save.fetch_add(1, Ordering::SeqCst) + 1;
+    let mut g = lock(&st.desk_save);
+    g.pos = (pos.x, pos.y);
+    g.due = Some(Instant::now() + Duration::from_millis(500));
+    if g.waiting {
+        return; // the waiting thread will see the new deadline
+    }
+    g.waiting = true;
+    drop(g);
     let app = app.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(500));
-        if app.state::<TriggerState>().desk_save.load(Ordering::SeqCst) != mine {
-            return;
-        }
-        let s = settings(&app);
-        if (s.triggers.desk_x - pos.x as f64).abs() < 1.0
-            && (s.triggers.desk_y - pos.y as f64).abs() < 1.0
-        {
-            return;
-        }
-        let patch =
-            serde_json::json!({ "triggers": { "desk_x": pos.x as f64, "desk_y": pos.y as f64 } });
-        if let Err(e) = app.state::<AppState>().update_settings(patch) {
-            log::warn!("desk pad: saving its position: {e}");
+        loop {
+            let st = app.state::<TriggerState>();
+            let mut g = lock(&st.desk_save);
+            let now = Instant::now();
+            match g.due {
+                Some(d) if d > now => {
+                    drop(g);
+                    std::thread::sleep(d - now);
+                }
+                Some(_) => {
+                    let pos = g.pos;
+                    g.due = None;
+                    g.waiting = false;
+                    drop(g);
+                    save_desk(&app, pos);
+                    return;
+                }
+                None => {
+                    g.waiting = false;
+                    return;
+                }
+            }
         }
     });
+}
+
+fn save_desk(app: &AppHandle, pos: (i32, i32)) {
+    let s = settings(app);
+    if (s.triggers.desk_x - pos.0 as f64).abs() < 1.0
+        && (s.triggers.desk_y - pos.1 as f64).abs() < 1.0
+    {
+        return;
+    }
+    let patch =
+        serde_json::json!({ "triggers": { "desk_x": pos.0 as f64, "desk_y": pos.1 as f64 } });
+    if let Err(e) = app.state::<AppState>().update_settings(patch) {
+        log::warn!("desk pad: saving its position: {e}");
+    }
 }
 
 /// First run (§4.6): make the handle pulse while the welcome points at it. The handle
@@ -398,9 +509,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_moved_event_at_the_placed_spot_is_not_a_user_drag() {
-        assert!(is_programmatic_move(Some((10, 20)), (10, 20)));
-        assert!(!is_programmatic_move(Some((10, 20)), (11, 20)));
-        assert!(!is_programmatic_move(None, (10, 20)));
+    fn only_a_drag_with_a_button_down_away_from_the_placed_spot_is_saved() {
+        assert!(is_user_drag(Some((10, 20)), (11, 20), true));
+        assert!(is_user_drag(None, (10, 20), true));
+        // place_desk's own Moved event.
+        assert!(!is_user_drag(Some((10, 20)), (10, 20), true));
+        // Windows moved it (monitor unplugged, DPI): no button is down.
+        assert!(!is_user_drag(Some((10, 20)), (500, 20), false));
+    }
+
+    fn rect(w: i32) -> (Rect, f64) {
+        (
+            Rect {
+                x: 0,
+                y: 0,
+                w,
+                h: 1040,
+            },
+            1.0,
+        )
+    }
+
+    #[test]
+    fn a_widget_is_re_placed_only_when_in_use_and_the_layout_changed() {
+        assert!(layout_changed(true, None, Some(rect(1920))));
+        assert!(layout_changed(true, Some(rect(1920)), Some(rect(2560))));
+        assert!(layout_changed(
+            true,
+            Some((rect(1920).0, 1.0)),
+            Some((rect(1920).0, 1.5))
+        ));
+        assert!(!layout_changed(true, Some(rect(1920)), Some(rect(1920))));
+        assert!(!layout_changed(true, Some(rect(1920)), None));
+        assert!(!layout_changed(false, None, Some(rect(1920))));
+    }
+
+    #[test]
+    fn drag_events_decide_the_pad_mode() {
+        let one = vec!["a".to_string()];
+        assert_eq!(drag_pad_mode(true, &one, false), Some(PadMode::Drag));
+        assert_eq!(drag_pad_mode(true, &one, true), None);
+        assert_eq!(drag_pad_mode(true, &[], false), None);
+        assert_eq!(drag_pad_mode(false, &one, false), Some(PadMode::Click));
+        // A drop re-opens in click mode even if a drag pad for the files is open.
+        assert_eq!(drag_pad_mode(false, &one, true), Some(PadMode::Click));
+        assert_eq!(drag_pad_mode(false, &[], false), None);
     }
 }

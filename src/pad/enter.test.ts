@@ -14,6 +14,14 @@ describe("enterAction", () => {
     expect(enterAction(s({ generation: 2 }), 3, ["a"])).toBe("ignore");
   });
 
+  it("parks an enter that arrives while a begin is in flight and no session matches", () => {
+    expect(enterAction(null, 3, ["a"], true)).toBe("park");
+    expect(enterAction(s({ generation: 2 }), 3, ["a"], true)).toBe("park");
+    expect(enterAction(null, 3, ["a"], false)).toBe("ignore");
+    // A current session is never parked, begin in flight or not.
+    expect(enterAction(s({ probe: true }), 3, ["a"], true)).toBe("rebegin");
+  });
+
   it("ignores a path-less drag (text, link) over a probe", () => {
     expect(enterAction(s({ probe: true }), 3, [])).toBe("ignore");
   });

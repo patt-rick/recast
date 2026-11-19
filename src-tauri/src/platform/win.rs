@@ -4,6 +4,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::process::Child;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError, mpsc};
 
 use windows::Win32::Foundation::{
@@ -38,15 +39,17 @@ use windows::Win32::System::Threading::{
     WaitForSingleObject,
 };
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+};
+use windows::Win32::UI::Shell::{ABM_GETAUTOHIDEBAREX, APPBARDATA, SHAppBarMessage};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, EVENT_SYSTEM_FOREGROUND, GWL_STYLE, GetClassNameW, GetDesktopWindow,
-    GetForegroundWindow, GetMessageW, GetShellWindow, GetSystemMetrics, GetWindowLongPtrW,
-    GetWindowRect, IsZoomed, MONITORINFOF_PRIMARY, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW,
-    PostThreadMessageW, SM_SWAPBUTTON, SW_HIDE, SW_SHOWNOACTIVATE, SetTimer,
-    SetWindowDisplayAffinity, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx,
-    WDA_EXCLUDEFROMCAPTURE, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_QUIT, WM_TIMER,
+    GetForegroundWindow, GetMessageW, GetShellWindow, GetWindowLongPtrW, GetWindowRect, IsZoomed,
+    MONITORINFOF_PRIMARY, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW,
+    SW_HIDE, SW_SHOWNOACTIVATE, SetTimer, SetWindowDisplayAffinity, SetWindowsHookExW, ShowWindow,
+    UnhookWindowsHookEx, WDA_EXCLUDEFROMCAPTURE, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_TIMER,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW,
@@ -453,17 +456,29 @@ pub fn strip_caption(hwnd: isize) {
     }
 }
 
-/// The primary mouse button is down right now (the physical right button when the user
-/// has swapped buttons). Polled; works without the mouse hook.
-pub fn left_button_down() -> bool {
-    unsafe {
-        let vk = if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
-            VK_RBUTTON
-        } else {
-            VK_LBUTTON
-        };
-        (GetAsyncKeyState(vk.0 as i32) as u16) & 0x8000 != 0
-    }
+/// Any mouse button is physically down right now (left, right or middle, by the physical
+/// key code, so swapped buttons need no special case). Polled; works without the hook.
+pub fn any_button_down() -> bool {
+    [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+        .iter()
+        .any(|vk| unsafe { (GetAsyncKeyState(vk.0 as i32) as u16) & 0x8000 != 0 })
+}
+
+/// An auto-hide appbar (taskbar) is docked on `edge` (`ABE_*`: left 0, top 1, right 2,
+/// bottom 3) of the monitor `monitor` (left, top, right, bottom).
+pub fn autohide_bar_on(edge: u32, monitor: [i32; 4]) -> bool {
+    let mut data = APPBARDATA {
+        cbSize: std::mem::size_of::<APPBARDATA>() as u32,
+        uEdge: edge,
+        rc: RECT {
+            left: monitor[0],
+            top: monitor[1],
+            right: monitor[2],
+            bottom: monitor[3],
+        },
+        ..Default::default()
+    };
+    unsafe { SHAppBarMessage(ABM_GETAUTOHIDEBAREX, &mut data) != 0 }
 }
 
 /// The foreground window and its monitor, as left, top, right, bottom.
@@ -523,8 +538,19 @@ pub struct MouseEvent {
 }
 
 type MouseSink = Box<dyn FnMut(MouseEvent) + Send>;
-/// The hook callback's only way out: a channel to the worker (B5).
-static MOUSE_TX: Mutex<Option<mpsc::Sender<MouseEvent>>> = Mutex::new(None);
+/// The hook callback's only way out: a channel to the worker (B5), tagged with the id of
+/// the hook that owns it so a stale hook's `Drop` cannot clear a newer hook's sender.
+static MOUSE_TX: Mutex<Option<(u64, mpsc::Sender<MouseEvent>)>> = Mutex::new(None);
+static NEXT_HOOK_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Hand an event to the current hook's worker. Never blocks.
+fn forward_mouse(e: MouseEvent) {
+    if let Ok(tx) = MOUSE_TX.try_lock()
+        && let Some((_, tx)) = tx.as_ref()
+    {
+        let _ = tx.send(e);
+    }
+}
 
 unsafe extern "system" fn ll_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
@@ -535,12 +561,9 @@ unsafe extern "system" fn ll_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) ->
             _ => None,
         };
         // Never block the system's mouse: try_lock and an unbounded send, nothing else.
-        if let Some(input) = input
-            && let Ok(tx) = MOUSE_TX.try_lock()
-            && let Some(tx) = tx.as_ref()
-        {
+        if let Some(input) = input {
             let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
-            let _ = tx.send(MouseEvent {
+            forward_mouse(MouseEvent {
                 t_ms: info.time,
                 x: info.pt.x,
                 y: info.pt.y,
@@ -555,6 +578,7 @@ unsafe extern "system" fn ll_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) ->
 /// a channel; a worker thread runs the sink (B5). Dropping it unhooks and joins both.
 /// One at a time: starting a second replaces the first's channel.
 pub struct MouseHook {
+    id: u64,
     thread_id: u32,
     hook_thread: Option<std::thread::JoinHandle<()>>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -605,8 +629,10 @@ impl MouseHook {
                 return Err(e);
             }
         };
-        *MOUSE_TX.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx);
+        let id = NEXT_HOOK_ID.fetch_add(1, Ordering::Relaxed);
+        *MOUSE_TX.lock().unwrap_or_else(PoisonError::into_inner) = Some((id, tx));
         Ok(MouseHook {
+            id,
             thread_id,
             hook_thread: Some(hook_thread),
             worker: Some(worker),
@@ -626,8 +652,14 @@ impl Drop for MouseHook {
         if let Some(j) = self.hook_thread.take() {
             let _ = j.join();
         }
-        // Unhooked: no more sends. Dropping the sender ends the worker's loop.
-        *MOUSE_TX.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        // Unhooked: no more sends. Dropping the sender ends the worker's loop. Only clear
+        // the sender if it is still ours: a newer hook may have replaced it.
+        {
+            let mut g = MOUSE_TX.lock().unwrap_or_else(PoisonError::into_inner);
+            if g.as_ref().is_some_and(|(id, _)| *id == self.id) {
+                *g = None;
+            }
+        }
         if let Some(j) = self.worker.take() {
             let _ = j.join();
         }
@@ -1027,12 +1059,46 @@ mod tests {
         let _ = transparency_enabled();
     }
 
+    /// The mouse hook is process-global; tests that start one must not overlap.
+    static HOOK_TEST: Mutex<()> = Mutex::new(());
+
     #[test]
     fn the_mouse_hook_starts_and_stops_cleanly() {
+        let _g = HOOK_TEST.lock().unwrap_or_else(PoisonError::into_inner);
         let hook = MouseHook::start(Box::new(|_e| {})).unwrap();
         drop(hook);
         // A second hook after the first is gone works too.
         drop(MouseHook::start(Box::new(|_e| {})).unwrap());
+    }
+
+    #[test]
+    fn dropping_an_old_hook_does_not_cut_off_a_newer_one() {
+        let _g = HOOK_TEST.lock().unwrap_or_else(PoisonError::into_inner);
+        const MARK: i32 = 987_654;
+        let a = MouseHook::start(Box::new(|_e| {})).unwrap();
+        let (tx, rx) = mpsc::channel::<i32>();
+        let b = MouseHook::start(Box::new(move |e| {
+            let _ = tx.send(e.x);
+        }))
+        .unwrap();
+        // The old hook goes away after the new one started.
+        drop(a);
+        forward_mouse(MouseEvent {
+            t_ms: 0,
+            x: MARK,
+            y: 0,
+            input: MouseInput::Move,
+        });
+        let got = std::iter::from_fn(|| rx.recv_timeout(std::time::Duration::from_secs(2)).ok())
+            .any(|x| x == MARK);
+        assert!(got, "the newer hook stopped receiving events");
+        drop(b);
+    }
+
+    #[test]
+    fn button_and_appbar_queries_do_not_panic() {
+        let _ = any_button_down();
+        let _ = autohide_bar_on(3, [0, 0, 1920, 1080]);
     }
 
     #[test]

@@ -16,7 +16,7 @@ static REG: Mutex<()> = Mutex::new(());
 /// Release builds always; a dev build only with RECAST_DEV_INTEGRATION=1, so `cargo run`
 /// never points Explorer or the Run key at target\debug (deviation 6).
 pub fn registry_allowed() -> bool {
-    !cfg!(debug_assertions) || std::env::var_os("RECAST_DEV_INTEGRATION").is_some()
+    !cfg!(debug_assertions) || std::env::var("RECAST_DEV_INTEGRATION").as_deref() == Ok("1")
 }
 
 /// Bring the Explorer verb and the Run value in line with the current settings. Re-run

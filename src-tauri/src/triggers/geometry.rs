@@ -93,6 +93,64 @@ pub fn handle_rect(edge: Edge, pos: f64, work: Rect, scale: f64) -> Rect {
     }
 }
 
+/// How far the handle stands off an edge that has an auto-hide taskbar, so the bar's
+/// reveal strip at the screen edge still gets the mouse.
+pub const AUTOHIDE_INSET: i32 = 2;
+
+/// Move `r` `inset` physical px away from `edge`, toward the screen centre.
+pub fn inset_from_edge(r: Rect, edge: Edge, inset: i32) -> Rect {
+    match edge {
+        Edge::Left => Rect {
+            x: r.x + inset,
+            ..r
+        },
+        Edge::Right => Rect {
+            x: r.x - inset,
+            ..r
+        },
+        Edge::Top => Rect {
+            y: r.y + inset,
+            ..r
+        },
+        Edge::Bottom => Rect {
+            y: r.y - inset,
+            ..r
+        },
+    }
+}
+
+/// The handle window for the current settings: the tab, or the grown window while
+/// highlighted, stood off the edge by `inset` (0 when no auto-hide bar is there).
+pub fn handle_window(
+    edge: Edge,
+    pos: f64,
+    work: Rect,
+    scale: f64,
+    grown: bool,
+    inset: i32,
+) -> Rect {
+    let r = if grown {
+        handle_rect_highlighted(edge, pos, work, scale)
+    } else {
+        handle_rect(edge, pos, work, scale)
+    };
+    inset_from_edge(r, edge, inset)
+}
+
+/// Where the pad opens for a drag over the handle: beside the TAB (never the grown
+/// window, whose far side is a label), so the cursor is already near the pad.
+pub fn handle_pad_anchor(
+    edge: Edge,
+    pos: f64,
+    work: Rect,
+    scale: f64,
+    inset: i32,
+    pad_px: i32,
+) -> (i32, i32) {
+    let tab = handle_window(edge, pos, work, scale, false, inset);
+    pad_anchor_beside(edge, tab, pad_px, scale)
+}
+
 pub const HANDLE_GROWN_W: f64 = 180.0;
 pub const HANDLE_GROWN_H: f64 = 80.0;
 
@@ -179,6 +237,39 @@ mod tests {
         w: 1920,
         h: 1040,
     };
+
+    #[test]
+    fn an_autohide_inset_moves_the_handle_off_its_edge() {
+        let l = handle_window(Edge::Left, 0.5, WORK, 1.0, false, AUTOHIDE_INSET);
+        assert_eq!((l.x, l.w), (2, 6));
+        let r = handle_window(Edge::Right, 0.5, WORK, 1.0, false, AUTOHIDE_INSET);
+        assert_eq!(r.right(), 1918);
+        let t = handle_window(Edge::Top, 0.5, WORK, 1.0, false, AUTOHIDE_INSET);
+        assert_eq!(t.y, 2);
+        let b = handle_window(Edge::Bottom, 0.5, WORK, 1.0, false, AUTOHIDE_INSET);
+        assert_eq!(b.bottom(), 1038);
+        assert_eq!(
+            handle_window(Edge::Left, 0.5, WORK, 1.0, false, 0),
+            handle_rect(Edge::Left, 0.5, WORK, 1.0)
+        );
+        let g = handle_window(Edge::Left, 0.5, WORK, 1.0, true, 2);
+        assert_eq!((g.x, g.w), (2, 180));
+    }
+
+    #[test]
+    fn the_pad_anchors_beside_the_tab_not_the_grown_window() {
+        // Left tab at y 480..560, 6 wide; pad 440: centre 6 + 12 + 220 = 238.
+        let tab = handle_pad_anchor(Edge::Left, 0.5, WORK, 1.0, 0, 440);
+        assert_eq!(tab, (238, 520));
+        // The grown window is 180 wide; anchoring on it would put the centre at 412.
+        let grown = handle_window(Edge::Left, 0.5, WORK, 1.0, true, 0);
+        assert_eq!(pad_anchor_beside(Edge::Left, grown, 440, 1.0).0, 412);
+        assert_eq!(
+            handle_pad_anchor(Edge::Right, 0.5, WORK, 1.0, 0, 440).0,
+            1920 - 6 - 12 - 220
+        );
+        assert_eq!(handle_pad_anchor(Edge::Left, 0.5, WORK, 1.0, 2, 440).0, 240);
+    }
 
     #[test]
     fn the_handle_sits_on_its_edge_at_its_position() {

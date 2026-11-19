@@ -51,6 +51,9 @@ export function PadApp() {
   const beginning = useRef(0);
   /** A drop that arrived while a begin was in flight with no session; replayed once the session is set. */
   const pendingDrop = useRef<PendingDrop | null>(null);
+  /** A file drag that entered with no session yet while a begin was in flight; replayed once it exists. */
+  const pendingEnter = useRef<string[] | null>(null);
+  const enterRef = useRef<(s: Session, paths: string[]) => void>(() => {});
   const dropRef = useRef<(s: Session, x: number, y: number, paths: string[]) => void>(() => {});
 
   useEffect(() => {
@@ -108,12 +111,20 @@ export function PadApp() {
     }
     if (key !== seq.current || req.generation === closedGen.current) {
       release(glass);
-      if (beginning.current === 0) pendingDrop.current = null;
+      if (beginning.current === 0) {
+        pendingDrop.current = null;
+        pendingEnter.current = null;
+      }
       return;
     }
     const next: Session = { key, generation: req.generation, paths: req.paths, mode: req.mode, model, glass, waiting, probe };
+    // Set the ref first: a drag entering before React renders must already see this session.
+    sessionRef.current = next;
     setSession(next);
     padRef.current.open(model, req.paths);
+    const enter = pendingEnter.current;
+    pendingEnter.current = null;
+    if (enter) enterRef.current(next, enter);
     // A drop that landed before the session existed: run it now (the reducer handles it after `open`).
     const early = pendingDrop.current;
     pendingDrop.current = null;
@@ -130,6 +141,7 @@ export function PadApp() {
         reducedTransparency.current = req.reduced_transparency;
         armed.current = req.armed;
         pendingDrop.current = null;
+        pendingEnter.current = null;
         void begin(req);
       }),
       onPadCursor((p) => {
@@ -167,6 +179,15 @@ export function PadApp() {
     }
   };
 
+  enterRef.current = (s, paths) => {
+    const action = enterAction(s, openGen.current, paths, false);
+    if (action === "ignore" || action === "park") return;
+    ipc.padTrackCursor(true, s.generation).catch(() => {});
+    if (action === "rebegin") {
+      void begin({ paths, mode: "drag", reduced_transparency: reducedTransparency.current, generation: s.generation, probe: false, armed: true });
+    }
+  };
+
   // Drags over the pad: Over positions drive targeting; Drop runs the targeted segment.
   useEffect(() => {
     const off = getCurrentWebview().onDragDropEvent((ev) => {
@@ -176,12 +197,9 @@ export function PadApp() {
       if (p.type === "enter") {
         dragging.current = true;
         armed.current = true;
-        const action = enterAction(s, openGen.current, p.paths);
-        if (!s || action === "ignore") return;
-        ipc.padTrackCursor(true, s.generation).catch(() => {});
-        if (action === "rebegin") {
-          void begin({ paths: p.paths, mode: "drag", reduced_transparency: reducedTransparency.current, generation: s.generation, probe: false, armed: true });
-        }
+        const action = enterAction(s, openGen.current, p.paths, beginning.current > 0);
+        if (action === "park") pendingEnter.current = p.paths;
+        else if (s) enterRef.current(s, p.paths);
       } else if (p.type === "over") {
         setExternal({ x: p.position.x / scale, y: p.position.y / scale });
       } else if (p.type === "leave") {

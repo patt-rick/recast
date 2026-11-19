@@ -475,7 +475,7 @@ fn track_cursor(app: &AppHandle, on: bool, generation: u64) {
                 let _ = app.emit_to(LABEL, "pad://cursor", p);
             }
             let now = began.elapsed().as_millis() as u64;
-            if platform::left_button_down() {
+            if platform::any_button_down() {
                 up_since = None;
             } else {
                 up_since.get_or_insert(now);
