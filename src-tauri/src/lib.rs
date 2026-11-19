@@ -49,13 +49,21 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .on_page_load(|wv, payload| {
+            // A reload drops the pad page's listeners; Rust must stop treating it as ready.
+            if wv.label() == pad::LABEL && payload.event() == tauri::webview::PageLoadEvent::Started
+            {
+                pad::page_loading(wv.app_handle());
+            }
+        })
         .setup(|app| {
             app_state::setup(app)?;
             toast::init(app.handle());
             pad::init(app.handle());
             triggers::init(app.handle());
             tray::build(app)?;
-            integration::sync_registry(app.handle());
+            // Failures are logged inside; startup has nobody to tell.
+            let _ = integration::sync_registry(app.handle());
             let argv: Vec<String> = std::env::args_os()
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect();

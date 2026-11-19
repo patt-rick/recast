@@ -1,18 +1,19 @@
 /** The edge handle and the desk pad (spec §4.1). Rust handles their drag-drop events. */
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 type Highlight = { on: boolean; edge: string };
 
 export function Widget() {
-  const [label] = useState(() => getCurrentWindow().label);
+  const [label] = useState(() => getCurrentWebviewWindow().label);
   const [hover, setHover] = useState(false);
   const [highlight, setHighlight] = useState<Highlight>({ on: false, edge: "left" });
   useEffect(() => {
+    // Window-scoped: the hover and highlight events are meant for this window only.
+    const me = getCurrentWebviewWindow();
     const offs = [
-      listen<boolean>("widget://hover", (e) => setHover(e.payload)),
-      listen<Highlight>("widget://highlight", (e) => setHighlight(e.payload)),
+      me.listen<boolean>("widget://hover", (e) => setHover(e.payload)),
+      me.listen<Highlight>("widget://highlight", (e) => setHighlight(e.payload)),
     ];
     return () => offs.forEach((o) => o.then((f) => f()));
   }, []);

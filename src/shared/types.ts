@@ -37,6 +37,8 @@ export interface PadModel {
   files: FileInfo[];
   presets: PresetView[];
   open_in_recast: boolean;
+  /** Files that couldn't be read and were left out. */
+  skipped: number;
 }
 
 export type JobStatus = "queued" | "waiting_engine" | "running" | "done" | "skipped" | "failed" | "cancelled" | "interrupted";

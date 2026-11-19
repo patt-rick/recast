@@ -6,8 +6,8 @@ const file = (over: Partial<FileInfo> = {}): FileInfo => ({
   path: "C:\\v\\holiday.mov", name: "holiday.mov", kind: "video", ext: "mov", format: "mov",
   size: 1288490189, duration_s: 134, has_audio: true, pages: null, ...over,
 });
-const model = (files: FileInfo[], presets = 1, open_in_recast = false): PadModel => ({
-  files, open_in_recast,
+const model = (files: FileInfo[], presets = 1, open_in_recast = false, skipped = 0): PadModel => ({
+  files, open_in_recast, skipped,
   presets: Array.from({ length: presets }, () => ({
     id: "x", label: "X", description: "x", icon: "film", engine: "ffmpeg", engine_name: "FFmpeg",
     engine_status: { state: "installed", version: "1", update_available: false }, min_files: 1, engine_size: 1, warning: null,
@@ -34,6 +34,15 @@ describe("disc text (§4.2)", () => {
     expect(discText(model([], 0)).note).toBe("Folders aren't supported yet. Drop the files inside instead.");
     expect(discText(model([file(), file({ kind: "pdf" })], 0, true)).note).toBe("These files are different kinds. Drop each kind separately.");
     expect(discText(model([file()], 0)).note).toBe("Recast has no conversions for this file.");
+  });
+
+  it("mentions files that couldn't be read", () => {
+    expect(discText(model([file(), file({ size: 10 })], 1, false, 1)).meta).toBe("1.2 GB in total · 1 skipped");
+    expect(discText(model([file()], 1, false, 2)).meta).toBe("MOV · 1.2 GB · 2:14 · 2 skipped");
+    // Everything failed: the empty-model note stays, with the count beside it.
+    const none = discText(model([], 0, false, 3));
+    expect(none.meta).toBe("3 skipped");
+    expect(none.note).toBe("Folders aren't supported yet. Drop the files inside instead.");
   });
 
   it("invites a drop while waiting for files", () => {

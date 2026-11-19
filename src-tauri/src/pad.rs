@@ -99,6 +99,14 @@ impl Inner {
         }
     }
 
+    /// The pad page started (re)loading: its listeners are gone until `pad_ready`.
+    /// Returns true when an open that was already delivered to the old page is now
+    /// orphaned (no parked request will replace it), so the caller must close it.
+    fn page_loading(&mut self) -> bool {
+        let was_ready = std::mem::replace(&mut self.ready, false);
+        was_ready && self.mode.is_some() && self.pending.is_none()
+    }
+
     fn is_current(&self, generation: u64) -> bool {
         self.generation == generation
     }
@@ -365,6 +373,19 @@ fn show_drag(app: &AppHandle, w: &tauri::WebviewWindow, generation: u64) {
         }
     }
     track_cursor(app, true, generation);
+}
+
+/// The pad page started loading (a reload): it is not listening any more. An open the
+/// old page already had would be an invisible topmost window, so close it.
+pub fn page_loading(app: &AppHandle) {
+    let Some(st) = app.try_state::<PadState>() else {
+        return;
+    };
+    let orphaned = lock(&st.inner).page_loading();
+    if orphaned {
+        log::warn!("pad: page reloaded while open; closing");
+        on_main(app, |app| close_now(app, None));
+    }
 }
 
 /// The pad page is listening: deliver an open that arrived earlier.
@@ -660,6 +681,32 @@ mod tests {
         assert!(s.dragging(k));
         assert!(s.begin_close(Some(k)));
         assert!(!s.waiting_for_drop(), "closed");
+    }
+
+    #[test]
+    fn a_reload_unreadies_the_page_and_orphans_a_delivered_open() {
+        let mut s = Inner {
+            ready: true,
+            ..Default::default()
+        };
+        assert!(s.begin(req()).is_some());
+        assert!(s.page_loading(), "the delivered open is orphaned");
+        assert!(!s.ready);
+        assert!(s.begin(req()).is_none(), "the next open parks");
+        assert!(s.pending.is_some());
+        assert!(!s.page_loading(), "already not ready: nothing to close");
+    }
+
+    #[test]
+    fn the_first_load_keeps_a_parked_open() {
+        let mut s = Inner::default();
+        assert!(s.begin(req()).is_none());
+        assert!(!s.page_loading(), "not ready yet: nothing was delivered");
+        assert!(s.pending.is_some());
+        // Ready, closed, then a reload: nothing open, nothing to close.
+        s.ready = true;
+        s.end();
+        assert!(!s.page_loading());
     }
 
     #[test]

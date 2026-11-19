@@ -10,6 +10,7 @@ Run: ______  Windows build: ______  Scale / monitors: ______
 
 - [ ] Install the setup exe on a clean profile: it needs no admin prompt, installs per user and starts Recast. The first-run welcome appears once.
 - [ ] Install a newer build **over** an existing install (the reinstall page, no uninstall first). Your downloaded engines (Library shows them Installed) and your Activity history are still there afterwards.
+- [ ] **Default upgrade path:** on that reinstall page leave the default "uninstall before installing" radio and leave "Delete app data" unticked. Engines (Library: Installed) and Activity history survive. The Explorer verb and the Run value are gone right after the install, and come back after Recast's first launch (check `HKCU\Software\Classes\*\shell\Recast` and the Run value, with both settings on).
 
 ## Triggers
 

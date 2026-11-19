@@ -30,7 +30,7 @@ interface Session {
 
 const reducedMotionQuery = () => window.matchMedia("(prefers-reduced-motion: reduce)");
 const darkQuery = () => window.matchMedia("(prefers-color-scheme: dark)");
-const EMPTY: PadModel = { files: [], presets: [], open_in_recast: false };
+const EMPTY: PadModel = { files: [], presets: [], open_in_recast: false, skipped: 0 };
 
 export function PadApp() {
   const [session, setSession] = useState<Session | null>(null);

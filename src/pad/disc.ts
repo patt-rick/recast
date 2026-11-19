@@ -17,7 +17,7 @@ export function discText(model: PadModel, waiting = false): { title: string; met
   const { files } = model;
   const one = files.length === 1 ? files[0] : null;
   const title = one ? one.name : files.length === 0 ? "Nothing to convert" : `${files.length} files`;
-  const meta = one
+  const base = one
     ? [
         one.format.toUpperCase(),
         formatBytes(one.size),
@@ -27,6 +27,8 @@ export function discText(model: PadModel, waiting = false): { title: string; met
     : files.length > 0
       ? `${formatBytes(files.reduce((a, f) => a + f.size, 0))} in total`
       : "";
+  const skipped = model.skipped > 0 ? `${model.skipped} skipped` : "";
+  const meta = [base, skipped].filter(Boolean).join(" · ");
   const note = model.presets.length > 0
     ? null
     : files.length === 0

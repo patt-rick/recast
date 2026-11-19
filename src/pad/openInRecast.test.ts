@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { OPEN_IN_RECAST_ID, startAction, withOpenInRecast } from "./openInRecast";
 import type { PadModel } from "../shared/types";
 
-const m = (over: Partial<PadModel>): PadModel => ({ files: [], presets: [], open_in_recast: false, ...over });
+const m = (over: Partial<PadModel>): PadModel => ({ files: [], presets: [], open_in_recast: false, skipped: 0, ...over });
 
 describe("withOpenInRecast", () => {
   it("adds the one segment only when the files are mixed and nothing covers them all", () => {

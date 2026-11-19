@@ -29,6 +29,12 @@ pub enum Shake {
     Armed,
 }
 
+/// Milliseconds from `earlier` to `now`, both low 32 bits of the system tick (it wraps
+/// every 49.7 days; a plain u64 difference would then see a huge or negative gap).
+fn elapsed_ms(earlier: u64, now: u64) -> u64 {
+    u64::from((now as u32).wrapping_sub(earlier as u32))
+}
+
 #[derive(Default, Debug)]
 pub struct Detector {
     down: bool,
@@ -86,7 +92,7 @@ impl Detector {
             while self
                 .reversals
                 .front()
-                .is_some_and(|&r| t.saturating_sub(r) > WINDOW_MS)
+                .is_some_and(|&r| elapsed_ms(r, t) > WINDOW_MS)
             {
                 self.reversals.pop_front();
             }
@@ -166,6 +172,20 @@ mod tests {
     fn a_quick_shake_arms_once_and_the_release_reports_nothing() {
         let s = stream(500, &[580, 500, 580, 500, 580, 500], 90, true);
         assert_eq!(run(&s), vec![Shake::Armed]);
+    }
+
+    #[test]
+    fn a_shake_across_the_tick_wrap_still_arms() {
+        let mut s = stream(500, &[580, 500, 580, 500, 580, 500], 90, true);
+        // Place the stream so its tick crosses u32::MAX partway through, as the OS tick
+        // does; samples carry the low 32 bits.
+        let base = u64::from(u32::MAX) - 1300;
+        for x in &mut s {
+            x.t_ms = (base + x.t_ms) & u64::from(u32::MAX);
+        }
+        assert!(s.iter().any(|x| x.t_ms < 300) && s.iter().any(|x| x.t_ms > 1_000_000));
+        assert_eq!(run(&s), vec![Shake::Armed]);
+        assert_eq!(elapsed_ms(u64::from(u32::MAX) - 5, 10), 16);
     }
 
     #[test]

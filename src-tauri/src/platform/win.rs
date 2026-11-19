@@ -1063,6 +1063,7 @@ mod tests {
     static HOOK_TEST: Mutex<()> = Mutex::new(());
 
     #[test]
+    #[ignore = "installs a system-wide mouse hook; run with --ignored on a desktop session"]
     fn the_mouse_hook_starts_and_stops_cleanly() {
         let _g = HOOK_TEST.lock().unwrap_or_else(PoisonError::into_inner);
         let hook = MouseHook::start(Box::new(|_e| {})).unwrap();
@@ -1072,6 +1073,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "installs a system-wide mouse hook; run with --ignored on a desktop session"]
     fn dropping_an_old_hook_does_not_cut_off_a_newer_one() {
         let _g = HOOK_TEST.lock().unwrap_or_else(PoisonError::into_inner);
         const MARK: i32 = 987_654;

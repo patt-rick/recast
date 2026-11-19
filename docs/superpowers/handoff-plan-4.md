@@ -5,20 +5,21 @@ Paste this into a new session, or say "read docs/superpowers/handoff-plan-4.md a
 ## Where things stand (2026-11-19)
 
 - **Repo:** `C:\Users\Patrick Ackom\Desktop\repos\recast`
-- **Branch:** `plan-3-triggers`, branched from `plan-2-pad` (Plan 2 is not merged into `master` yet; check `git log master..plan-3-triggers` and ask the owner how to land the chain: merge or PR). Nothing pushed.
+- **Branch:** `plan-3-triggers`, branched from `plan-2-pad`. Plan 2 is already merged into `master` (fast-forward), so `git log master..plan-3-triggers` holds only Plan 3. Plan 3 lands on `master` the same way (fast-forward) when the owner says so. Nothing pushed.
 - **Plan 3 is done:**
   - Triggers: the edge handle, the desk pad and shake-while-dragging (with an invisible probe confirmed by a real file drag), plus auto-hide over fullscreen.
   - Shell: `recast.exe --pad <files>` with single-instance forwarding and a debounce, the Explorer verb, start with Windows (`--autostart`), HKCU registry sync.
   - Notification buttons, tray glyphs that follow the taskbar theme, Open in Recast for mixed kinds, Settings → Opening the pad, the first-run welcome.
   - The NSIS uninstall hook, `docs/qa-checklist.md`, and the spec updated to match (§6.14 lists the deviations).
 - **Tests, all passing on the final code:**
-  - 217 Rust unit tests (`cargo test -j 2`)
-  - 102 Vitest tests (`npm test`)
+  - 222 Rust unit tests run by `cargo test -j 2`, plus 2 ignored ones (see below)
+  - 106 Vitest tests (`npm test`)
   - 11 real-engine integration tests
+  - The 2 ignored tests in `platform::win` install a real system-wide `WH_MOUSE_LL` hook, so they need a desktop session: `cargo test -j 2 --lib -- --ignored the_mouse_hook_starts_and_stops_cleanly dropping_an_old_hook_does_not_cut_off_a_newer_one --test-threads=1`. Both passed on 2026-11-19.
   - clippy (`-D warnings`) and rustfmt clean; `npm run build` (tsc) clean
 - **Release build:** `npm run tauri build` makes `src-tauri/target/release/bundle/nsis/Recast_0.1.0_x64-setup.exe`, 6,460,018 bytes (6.16 MiB). `src-tauri/target/release/nsis/x64/installer.nsi` includes `windows/hooks.nsh` and runs `NSIS_HOOK_POSTUNINSTALL` inside `Section Uninstall`.
 - **Checked in a live dev run (2026-11-19, 150% primary plus a 100% second monitor), by window dump and CDP:** the handle window is 6 × 80 logical px (9 × 120 physical, no 198 px caption minimum) and the desk pad 96 × 96; `recast.exe --pad` forwarding opens one click-mode pad on the monitor of the cursor (both monitors, repeatedly); a mixed `--pad` (png + txt) shows the Open segment and pill, and activating it lists "1 image" and "1 document" groups with Choose conversion in Activity; Settings changes move the handle between edges, hide and show it, and show and hide the desk pad; `highlight_handle` grows the handle to 180 × 80 and back.
-- **One dev-run oddity, not reproduced:** the first three `--pad` forwards after a cold `npm run tauri dev` start logged `pad: open` but the pad window never became visible, and its page was empty; every later forward (a dozen, on both monitors) worked. It looks like the pad page had not finished loading or registering `pad_ready` after Vite's cold start (compare the "pad page reload leaves `ready` true" finding below). Worth a look if it shows up in a release build.
+- **One dev-run oddity, not reproduced:** the first three `--pad` forwards after a cold `npm run tauri dev` start logged `pad: open` but the pad window never became visible, and its page was empty; every later forward (a dozen, on both monitors) worked. It looks like the pad page had not finished loading or registering `pad_ready` after Vite's cold start (the reload bug fixed in the final review round, where a reloading pad page stayed marked ready, is a likely cause). Worth a look if it shows up in a release build.
 - **Unverified on real hardware** (the automation had no hands): everything in `docs/qa-checklist.md`. The most important is the shake probe: a real Explorer drag, shaken, must log `pad: drag entered` and show the pad. If it doesn't, give `.pad-body` a `rgba(0,0,0,0.004)` background while probing.
 
 ## Read first
@@ -34,11 +35,11 @@ Paste this into a new session, or say "read docs/superpowers/handoff-plan-4.md a
    - **Pandoc and remote images:** Pandoc may fetch remote images that a converted document links to (§8). Keep, or block it?
    - **MOV output** re-encodes to H.264/AAC instead of remuxing (§5.1). Keep?
    - **Uninstall and upgrade data policy (changed spec §6.12):** Tauri's reinstall page runs the old uninstaller without `/UPDATE`, so the first draft ("always delete `%LOCALAPPDATA%\Recast`") would have wiped all engines (about 250 MB) and the history on every manual upgrade. The hook now always removes the verb, the Run value, `logs` and `tmp`, and removes `%LOCALAPPDATA%\Recast` (engines, history) and `%APPDATA%\Recast` (settings) only when "Delete app data" is ticked. The cost: a plain uninstall leaves engines and history behind. Confirm this is what you want.
-3. **Landing and release:** decide how the branch chain lands, then tag a release. The installer is unsigned (SmartScreen warns; §11).
+3. **Landing and release:** when the owner says so, fast-forward `master` to `plan-3-triggers` (as Plan 2 was), then tag a release. The installer is unsigned (SmartScreen warns; §11).
 4. **Unfixed earlier review findings** (checked against the code on 2026-11-19; Plan 3 didn't touch any of them):
    - `CAPTUREBLT` isn't used for the backdrop capture, so layered windows of other apps are missing from the image. It avoids cursor flicker.
    - The cursor poll makes several main-thread round trips per 16 ms (it now also samples the mouse buttons).
-   - A pad page reload (WebView2 crash or HMR) leaves `ready` true, so opens sent before the next `pad_ready` are lost.
+   - `inspect` probes files sequentially (a 100-video Explorer selection keeps the click-mode pad hidden for seconds).
    - The "Convert files…" dialog has no owner window.
    - Thumbnail size is read, then the file is read separately (a TOCTOU on the 25 MB cap).
    - Paging only fades the new symbols in; the glass doesn't cross-fade.
@@ -79,5 +80,5 @@ Paste this into a new session, or say "read docs/superpowers/handoff-plan-4.md a
 ## First steps for the new session
 
 1. `git status` and `git log --oneline -5` on `plan-3-triggers` to confirm a clean tree.
-2. Ask the owner how the branch chain lands (merge or PR) and for the three owner decisions above.
+2. Ask the owner when to land `plan-3-triggers` on `master` (fast-forward) and for the three owner decisions above.
 3. Build the installer (`npm run tauri build`), install it on a test profile, and work through `docs/qa-checklist.md`. Fix what fails with an Opus review before reporting.

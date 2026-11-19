@@ -23,11 +23,11 @@ describe("createSaveQueue", () => {
     expect(started).toEqual([1, 2]);
   });
 
-  it("applies only the newest request's answer", async () => {
+  it("applies every successful answer, in order", async () => {
     const applied: number[] = [];
     const save = createSaveQueue(async (n: number) => n, (r) => applied.push(r));
     await Promise.all([save(1), save(2), save(3)]);
-    expect(applied).toEqual([3]);
+    expect(applied).toEqual([1, 2, 3]);
   });
 
   it("applies an older answer when nothing newer was asked", async () => {
@@ -54,5 +54,22 @@ describe("createSaveQueue", () => {
     expect(b).toEqual({ ok: true });
     expect(errors).toEqual(["Error: disk full"]);
     expect(applied).toEqual([2]);
+  });
+
+  it("keeps earlier successes when a later save fails", async () => {
+    const errors: string[] = [];
+    const applied: number[] = [];
+    const save = createSaveQueue(
+      async (n: number) => {
+        if (n === 3) throw new Error("boom");
+        return n;
+      },
+      (r) => applied.push(r),
+      (e) => errors.push(e),
+    );
+    const results = await Promise.all([save(1), save(2), save(3)]);
+    expect(applied).toEqual([1, 2]);
+    expect(results[2]).toEqual({ ok: false, error: "Error: boom" });
+    expect(errors).toEqual(["Error: boom"]);
   });
 });

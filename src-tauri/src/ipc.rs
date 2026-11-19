@@ -334,7 +334,7 @@ pub async fn set_settings(app: AppHandle, patch: serde_json::Value) -> Result<Se
     let handle = app.clone();
     let (before, after) =
         blocking(move || handle.state::<AppState>().update_settings(patch)).await?;
-    crate::integration::settings_changed(&app, &before, &after);
+    crate::integration::settings_changed(&app, &before, &after)?;
     Ok(after)
 }
 

@@ -121,16 +121,18 @@ impl Collector {
 
 /// A flush within `CAP` of the previous one opens the pad with the earlier paths too
 /// (order kept, duplicates removed): a late straggler adds to the pad instead of
-/// replacing it.
+/// replacing it. Only while that earlier pad is still open (`still_open`): a straggler
+/// that arrives after the user dismissed it starts fresh.
 pub fn merge_recent(
     prev: Option<(&[String], Instant)>,
     new: Vec<String>,
     now: Instant,
+    still_open: bool,
 ) -> Vec<String> {
     let Some((prev, at)) = prev else {
         return new;
     };
-    if now.saturating_duration_since(at) > CAP {
+    if !still_open || now.saturating_duration_since(at) > CAP {
         return new;
     }
     let mut out = prev.to_vec();
@@ -186,7 +188,7 @@ pub fn forward(app: &AppHandle, paths: Vec<String>) {
                 Some(_) => {
                     let fresh = g.collector.take_if_due(now).unwrap_or_default();
                     let prev = g.last.as_ref().map(|(p, t)| (p.as_slice(), *t));
-                    let paths = merge_recent(prev, fresh, now);
+                    let paths = merge_recent(prev, fresh, now, crate::pad::is_open(&app));
                     g.last = Some((paths.clone(), now));
                     g.waiting = false;
                     drop(g);
@@ -312,13 +314,30 @@ mod tests {
         let t0 = Instant::now();
         let prev = vec!["a".to_string(), "b".to_string()];
         let new = || vec!["b".to_string(), "c".to_string()];
-        let merged = merge_recent(Some((&prev, t0)), new(), t0 + Duration::from_millis(1500));
+        let merged = merge_recent(
+            Some((&prev, t0)),
+            new(),
+            t0 + Duration::from_millis(1500),
+            true,
+        );
         assert_eq!(
             merged,
             vec!["a".to_string(), "b".to_string(), "c".to_string()]
         );
-        let merged = merge_recent(Some((&prev, t0)), new(), t0 + Duration::from_millis(2500));
+        let merged = merge_recent(
+            Some((&prev, t0)),
+            new(),
+            t0 + Duration::from_millis(2500),
+            true,
+        );
         assert_eq!(merged, new(), "after the cap it does not merge");
-        assert_eq!(merge_recent(None, new(), t0), new());
+        let closed = merge_recent(
+            Some((&prev, t0)),
+            new(),
+            t0 + Duration::from_millis(1500),
+            false,
+        );
+        assert_eq!(closed, new(), "a dismissed pad is not merged into");
+        assert_eq!(merge_recent(None, new(), t0, true), new());
     }
 }

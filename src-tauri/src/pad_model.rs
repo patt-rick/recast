@@ -70,17 +70,34 @@ pub struct PadModel {
     pub files: Vec<FileInfo>,
     pub presets: Vec<PresetView>,
     pub open_in_recast: bool,
+    /// Files that couldn't be read and were left out of `files`.
+    pub skipped: usize,
 }
 
 pub fn build(catalog: &Catalog, engines: &Engines, paths: &[String]) -> Result<PadModel, String> {
     let mut files = Vec::new();
+    let mut skipped = 0;
     for p in paths {
-        let path = std::path::absolute(p).map_err(|e| e.to_string())?;
+        // One unreadable file must not sink the rest: skip it and count it.
+        let path = match std::path::absolute(p) {
+            Ok(path) => path,
+            Err(e) => {
+                log::warn!("pad: skipping an unresolvable path: {e}");
+                skipped += 1;
+                continue;
+            }
+        };
         if path.is_dir() {
             continue; // folders are a v1 non-goal (spec §3)
         }
-        let mut info = detect::detect(&path, &|q| engines.probe(q))
-            .map_err(|e| format!("Couldn't read {}: {e}", path.display()))?;
+        let mut info = match detect::detect(&path, &|q| engines.probe(q)) {
+            Ok(info) => info,
+            Err(e) => {
+                log::warn!("pad: skipping {}: {}", path.display(), e.kind());
+                skipped += 1;
+                continue;
+            }
+        };
         if info.kind == Kind::Pdf {
             info.pages = engines.pdf_pages(&path);
         }
@@ -123,6 +140,7 @@ pub fn build(catalog: &Catalog, engines: &Engines, paths: &[String]) -> Result<P
         files,
         presets,
         open_in_recast: avail.open_in_recast,
+        skipped,
     })
 }
 
@@ -175,6 +193,60 @@ mod tests {
         assert!(r.contains(std::path::Path::new(r"C:\f44.png")));
         r.add(std::path::PathBuf::from(r"C:\f44.png")); // re-adding refreshes, no duplicate
         assert_eq!(r.len(), 256);
+    }
+
+    fn test_engines(d: &std::path::Path) -> Engines {
+        Engines::new(
+            Manifest::parse(BUNDLED).unwrap(),
+            d.join("engines"),
+            d.join("7z.exe"),
+            Box::new(HttpFetcher),
+        )
+    }
+
+    const PNG_HEAD: [u8; 16] = [
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R',
+    ];
+
+    #[test]
+    fn an_unreadable_file_is_skipped_and_counted_not_fatal() {
+        let d = tempfile::tempdir().unwrap();
+        let engines = test_engines(d.path());
+        let catalog = Catalog::parse(PRESETS).unwrap();
+        let png = d.path().join("a.png");
+        std::fs::write(&png, PNG_HEAD).unwrap();
+        let gone = d.path().join("gone.png");
+        let m = build(
+            &catalog,
+            &engines,
+            &[
+                png.to_string_lossy().into_owned(),
+                gone.to_string_lossy().into_owned(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(m.files.len(), 1);
+        assert_eq!(m.skipped, 1);
+        assert_eq!(m.presets[0].id, "image-jpg");
+    }
+
+    #[test]
+    fn when_every_file_fails_the_model_is_empty_with_the_count() {
+        let d = tempfile::tempdir().unwrap();
+        let engines = test_engines(d.path());
+        let catalog = Catalog::parse(PRESETS).unwrap();
+        let gone = d.path().join("gone.png");
+        let m = build(&catalog, &engines, &[gone.to_string_lossy().into_owned()]).unwrap();
+        assert!(m.files.is_empty() && m.presets.is_empty());
+        assert_eq!(m.skipped, 1);
+        // A folder is not an error and is not counted.
+        let m = build(
+            &catalog,
+            &engines,
+            &[d.path().to_string_lossy().into_owned()],
+        )
+        .unwrap();
+        assert_eq!(m.skipped, 0);
     }
 
     #[test]
