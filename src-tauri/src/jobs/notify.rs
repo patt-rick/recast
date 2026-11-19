@@ -1,12 +1,28 @@
 //! Done/failed notifications; one combined notification for batches of 3+ (spec §4.3).
 use std::collections::HashMap;
 
-use super::JobEvent;
+use super::{ErrorCode, JobEvent};
+
+/// What a notification is about, so its buttons and a click can act on it (spec §4.3).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Target {
+    /// A finished job: "Show in folder".
+    Done(String),
+    /// A failed job: "Details".
+    Failed(String),
+    /// A job that couldn't write its output: "Save to fallback folder" and "Details".
+    DestFailed(String),
+    /// A batch or a skip: a click opens Activity.
+    Activity,
+    /// An engine download that failed: "Retry".
+    Engine(String),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Notification {
     pub title: String,
     pub body: String,
+    pub target: Option<Target>,
 }
 
 #[derive(Default)]
@@ -63,6 +79,7 @@ impl Notifier {
                 return Some(Notification {
                     title: format!("Nothing to convert · {} files skipped", t.skipped),
                     body: "They're already in that format or as small as they get.".into(),
+                    target: Some(Target::Activity),
                 });
             } else {
                 format!(
@@ -80,6 +97,7 @@ impl Notifier {
             return Some(Notification {
                 title,
                 body: "Open Recast to see the results.".into(),
+                target: Some(Target::Activity),
             });
         }
         let message = || {
@@ -95,14 +113,25 @@ impl Notifier {
                     ev.out_path.as_deref().map(base).unwrap_or_default()
                 ),
                 body: format!("{} · from {}", ev.preset_label, ev.file),
+                target: Some(Target::Done(ev.job_id.clone())),
             }),
             "skipped" => Some(Notification {
                 title: "Nothing to do".into(),
                 body: message(),
+                target: Some(Target::Activity),
             }),
             "failed" => Some(Notification {
                 title: format!("Couldn't convert {}", ev.file),
                 body: message(),
+                target: Some(
+                    if ev.error.as_ref().is_some_and(|e| {
+                        matches!(e.code, ErrorCode::DestUnwritable | ErrorCode::DestLocked)
+                    }) {
+                        Target::DestFailed(ev.job_id.clone())
+                    } else {
+                        Target::Failed(ev.job_id.clone())
+                    },
+                ),
             }),
             _ => None,
         }
@@ -131,6 +160,46 @@ mod tests {
                 message: "The file looks damaged or incomplete.".into(),
             }),
         }
+    }
+
+    #[test]
+    fn notifications_carry_what_their_buttons_act_on() {
+        let mut n = Notifier::default();
+        let mut done = ev("b", 1, "done");
+        done.job_id = "j1".into();
+        assert_eq!(
+            n.on_event(&done).unwrap().target,
+            Some(Target::Done("j1".into()))
+        );
+        assert_eq!(
+            n.on_event(&ev("c", 1, "failed")).unwrap().target,
+            Some(Target::Failed("j".into()))
+        );
+        let mut dest = ev("d", 1, "failed");
+        dest.error = Some(JobError {
+            code: ErrorCode::DestUnwritable,
+            message: "x".into(),
+        });
+        assert_eq!(
+            n.on_event(&dest).unwrap().target,
+            Some(Target::DestFailed("j".into()))
+        );
+        let mut locked = ev("e", 1, "failed");
+        locked.error = Some(JobError {
+            code: ErrorCode::DestLocked,
+            message: "x".into(),
+        });
+        assert_eq!(
+            n.on_event(&locked).unwrap().target,
+            Some(Target::DestFailed("j".into()))
+        );
+        for s in ["done", "done"] {
+            let _ = n.on_event(&ev("f", 3, s));
+        }
+        assert_eq!(
+            n.on_event(&ev("f", 3, "done")).unwrap().target,
+            Some(Target::Activity)
+        );
     }
 
     #[test]

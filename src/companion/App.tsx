@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Activity } from "./Activity";
+import { onNavigate } from "../shared/ipc";
 import { router } from "./dragRouter";
 import { Library } from "./Library";
 import { SettingsView } from "./Settings";
@@ -18,6 +19,18 @@ export function App() {
   const [section, setSection] = useState<Section>("activity");
   const sectionRef = useRef(section);
   sectionRef.current = section;
+  const [focusJob, setFocusJob] = useState<{ id: string; n: number } | null>(null);
+
+  // Notification buttons and clicks point the companion at a section, and maybe a job.
+  useEffect(() => {
+    const off = onNavigate((p) => {
+      setSection(p.section);
+      if (p.job_id) setFocusJob((f) => ({ id: p.job_id!, n: (f?.n ?? 0) + 1 }));
+    });
+    return () => {
+      off.then((f) => f());
+    };
+  }, []);
 
   // The one drag-drop listener; the router hands events to the section that should get them.
   useEffect(() => {
@@ -55,7 +68,7 @@ export function App() {
       </nav>
       {/* All views stay mounted so Activity keeps receiving job events. */}
       <main className="content" hidden={section !== "activity"}>
-        <Activity />
+        <Activity focusJob={focusJob} />
       </main>
       <main className="content" hidden={section !== "tools"}>
         <Tools />

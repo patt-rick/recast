@@ -18,6 +18,7 @@ pub mod proc;
 pub mod settings;
 pub mod shell;
 pub mod thumbs;
+pub mod toast;
 pub mod tray;
 pub mod triggers;
 
@@ -50,6 +51,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             app_state::setup(app)?;
+            toast::init(app.handle());
             pad::init(app.handle());
             triggers::init(app.handle());
             tray::build(app)?;

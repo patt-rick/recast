@@ -4,7 +4,6 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::app_state::AppState;
@@ -54,16 +53,8 @@ impl Events for TauriEvents {
         // Out of the lock before show(): the OS call may be slow.
         let n = lock(&self.notifier).on_event(ev);
         let n = unless_watching(n, self.companion_in_front());
-        if let Some(n) = n
-            && let Err(e) = self
-                .app
-                .notification()
-                .builder()
-                .title(&n.title)
-                .body(&n.body)
-                .show()
-        {
-            log::warn!("notification: {e}");
+        if let Some(n) = n {
+            crate::toast::show(&self.app, &n.title, &n.body, n.target);
         }
     }
 }
@@ -328,7 +319,7 @@ pub async fn set_settings(app: AppHandle, patch: serde_json::Value) -> Result<Se
 }
 
 /// The saved output of a job: only a done job whose file still exists qualifies.
-fn job_output(history: &History, id: &str) -> Result<PathBuf, String> {
+pub(crate) fn job_output(history: &History, id: &str) -> Result<PathBuf, String> {
     let rec = history
         .get(id)
         .map_err(|e| e.to_string())?

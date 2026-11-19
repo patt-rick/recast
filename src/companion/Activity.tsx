@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState, type Dispatch } from "react";
+import { useEffect, useReducer, useRef, useState, type Dispatch } from "react";
 import { ipc, onJobEvent } from "../shared/ipc";
 import { formatEta } from "../shared/format";
 import type { JobEvent, JobRecord, PadModel } from "../shared/types";
@@ -33,7 +33,7 @@ interface Dropped {
   pad: PadModel;
 }
 
-export function Activity() {
+export function Activity({ focusJob }: { focusJob?: { id: string; n: number } | null }) {
   const [jobs, dispatch] = useReducer(reducer, empty);
   const [dropped, setDropped] = useState<Dropped | null>(null);
   const [hovering, setHovering] = useState(false);
@@ -116,7 +116,7 @@ export function Activity() {
           <h2>Running</h2>
           <ul className="jobs">
             {active.map((j) => (
-              <JobRow key={j.id} job={j} dispatch={dispatch} report={report} />
+              <JobRow key={j.id} job={j} dispatch={dispatch} report={report} focused={focusJob?.id === j.id ? focusJob.n : 0} />
             ))}
           </ul>
         </>
@@ -128,7 +128,7 @@ export function Activity() {
       ) : (
         <ul className="jobs">
           {history.map((j) => (
-            <JobRow key={j.id} job={j} dispatch={dispatch} report={report} />
+            <JobRow key={j.id} job={j} dispatch={dispatch} report={report} focused={focusJob?.id === j.id ? focusJob.n : 0} />
           ))}
         </ul>
       )}
@@ -161,8 +161,14 @@ function statusLine(j: JobView): string {
   }
 }
 
-function JobRow({ job: j, dispatch, report }: { job: JobView; dispatch: Dispatch<Action>; report: (e: unknown) => void }) {
+function JobRow({ job: j, dispatch, report, focused }: { job: JobView; dispatch: Dispatch<Action>; report: (e: unknown) => void; focused: number }) {
   const [open, setOpen] = useState(false);
+  const rowRef = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (!focused) return;
+    setOpen(true);
+    rowRef.current?.scrollIntoView({ block: "center" });
+  }, [focused]);
   const running = j.status === "queued" || j.status === "waiting_engine" || j.status === "running";
   const [retrying, setRetrying] = useState(false);
   const retry = async (fallback?: boolean) => {
@@ -178,7 +184,7 @@ function JobRow({ job: j, dispatch, report }: { job: JobView; dispatch: Dispatch
   };
   const removeRow = () => ipc.removeJob(j.id).then(() => dispatch({ type: "remove", id: j.id }), report);
   return (
-    <li className={`job ${j.status}`}>
+    <li ref={rowRef} className={`job ${j.status}`}>
       <div className="job-main">
         <div className="job-title">
           <strong>{j.file}</strong> <span className="muted">→ {j.presetLabel}</span>

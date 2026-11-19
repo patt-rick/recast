@@ -46,6 +46,10 @@ async function listenAll<T>(names: readonly string[], cb: (payload: T) => void):
 
 export const onJobEvent = (cb: (e: JobEvent) => void) => listenAll(JOB_EVENTS, cb);
 export const onEngineEvent = (cb: (e: EngineEvent) => void) => listenAll(ENGINE_EVENTS, cb);
+export type NavigatePayload = { section: "activity" | "library"; job_id: string | null };
+/** A notification button or click asked the companion to go somewhere. */
+export const onNavigate = (cb: (p: NavigatePayload) => void) =>
+  listen<NavigatePayload>("companion://navigate", (e) => cb(e.payload));
 export const onPadOpen = (cb: (p: PadOpen) => void) => listen<PadOpen>("pad://open", (e) => cb(e.payload));
 /** Cursor relative to the pad window, logical px (only while tracking). */
 export const onPadCursor = (cb: (p: { x: number; y: number }) => void) =>

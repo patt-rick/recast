@@ -7,7 +7,6 @@ use crate::lockutil::lock;
 
 use tauri::path::BaseDirectory;
 use tauri::{Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
 
 use crate::engines::install::HttpFetcher;
 use crate::engines::manifest::{self, Manifest};
@@ -31,6 +30,8 @@ pub struct AppState {
     pub licenses_dir: PathBuf,
     /// Files a recent `inspect` returned; `thumbnail` reads only these.
     pub recent: Arc<Mutex<crate::pad_model::RecentPaths>>,
+    /// Dedupe state for engine-download failure toasts; shared with the engine listener.
+    pub engine_notices: Arc<Mutex<FailureNotices>>,
 }
 
 pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
@@ -69,7 +70,8 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         Box::new(HttpFetcher),
     ));
     let handle = app.handle().clone();
-    let dedupe = Mutex::new(FailureNotices::default());
+    let engine_notices = Arc::new(Mutex::new(FailureNotices::default()));
+    let dedupe = engine_notices.clone();
     engines.set_listener(Arc::new(move |e: EngineEvent| {
         let event = match &e {
             EngineEvent::Progress { .. } => "engine://progress",
@@ -81,15 +83,12 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             && lock(&dedupe).should_notify(id, error, std::time::Instant::now())
         {
             let name = engine_names.get(id).unwrap_or(id);
-            if let Err(err) = handle
-                .notification()
-                .builder()
-                .title(format!("Couldn't download {name}"))
-                .body(error)
-                .show()
-            {
-                log::warn!("notification: {err}");
-            }
+            crate::toast::show(
+                &handle,
+                &format!("Couldn't download {name}"),
+                error,
+                Some(crate::jobs::notify::Target::Engine(id.clone())),
+            );
         }
     }));
 
@@ -133,6 +132,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         sevenzip_licence,
         licenses_dir,
         recent: Arc::new(Mutex::new(Default::default())),
+        engine_notices,
     });
     Ok(())
 }
@@ -158,6 +158,11 @@ impl AppState {
         Ok((before, after))
     }
 
+    /// Forget that `id`'s failure was notified, so a retry that fails again notifies again.
+    pub fn reset_engine_notice(&self, id: &str) {
+        lock(&self.engine_notices).reset(id);
+    }
+
     pub fn settings_now(&self) -> settings::Settings {
         lock(&self.settings).settings.clone()
     }
@@ -166,12 +171,16 @@ impl AppState {
 /// Decides which engine failures deserve a notification: never the "busy" refusal,
 /// and at most one per engine per minute.
 #[derive(Default)]
-struct FailureNotices {
+pub struct FailureNotices {
     last: HashMap<String, std::time::Instant>,
 }
 
 impl FailureNotices {
     const WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+    pub fn reset(&mut self, id: &str) {
+        self.last.remove(id);
+    }
 
     fn should_notify(&mut self, id: &str, error: &str, at: std::time::Instant) -> bool {
         if error == crate::engines::ENGINE_BUSY {
@@ -207,6 +216,8 @@ mod tests {
         assert!(!n.should_notify("ffmpeg", "boom", t0 + Duration::from_secs(59)));
         assert!(n.should_notify("pandoc", "boom", t0 + Duration::from_secs(1)));
         assert!(n.should_notify("ffmpeg", "boom", t0 + Duration::from_secs(61)));
+        n.reset("pandoc");
+        assert!(n.should_notify("pandoc", "boom", t0 + Duration::from_secs(2)));
     }
 
     #[test]
