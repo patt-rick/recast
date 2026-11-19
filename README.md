@@ -39,6 +39,12 @@ To run a subset of the Rust tests, pass a filter after `--`, for example `cargo 
 
 ## Installer
 
-`npm run tauri build` writes `src-tauri/target/release/bundle/nsis/Recast_0.1.0_x64-setup.exe`, a per-user installer of **6.2 MB** (6,460,018 bytes). The engines aren't in it. They download on first use, and the full 7-Zip 26.06 (`7z.exe` + `7z.dll`) ships inside the app to unpack them.
+`npm run tauri build` writes `src-tauri/target/release/bundle/nsis/Recast_0.1.0_x64-setup.exe`, a per-user installer of about **6.2 MB**. The engines aren't in it. They download on first use, and the full 7-Zip 26.06 (`7z.exe` + `7z.dll`) ships inside the app to unpack them.
 
 Recast's own code is MIT. Engines keep their own licences (Library → Third-party notices).
+
+## CI and releases
+
+- **CI** (`.github/workflows/ci.yml`) runs on pushes to `master` and on pull requests: front-end tests and build, then `cargo fmt --check`, clippy and the Rust tests (not the real-engine tests).
+- **Release** (`.github/workflows/release.yml`): bump the version in `src-tauri/tauri.conf.json`, `package.json` and `src-tauri/Cargo.toml`, commit, then push a tag `vX.Y.Z`. The workflow builds the installer and publishes it with its SHA-256 on the GitHub release for that tag. It won't replace an installer a release already has. Run it by hand (Actions → Release → Run workflow) to get a build from the run's artifacts without touching any release.
+- The installer isn't code-signed yet; signing goes between the build and the checksum steps.

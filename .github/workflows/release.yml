@@ -1,0 +1,132 @@
+# Builds the NSIS installer.
+# - Pushing a tag vX.Y.Z (matching the app version) builds it and publishes it, with its
+#   SHA-256, on the GitHub release for that tag (created as a draft, filled, then published).
+#   A release that already has the installer is left alone: a rebuild never replaces it.
+# - Run it by hand (Actions > Release > Run workflow) for a build to download from the run's
+#   artifacts. A manual run never touches a release, even when started from a tag.
+# The build job can only read the repo; only the publish job can write releases. Code
+# signing (SignPath, Azure Artifact Signing) goes between the build and the checksum.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master, 2026-11
+        with:
+          toolchain: 1.96.0
+
+      # No build cache here: a release is built from scratch, not from a cache that branch
+      # builds could have written.
+
+      - name: Install front-end dependencies
+        run: npm ci
+
+      - name: Read the app version
+        id: version
+        shell: pwsh
+        run: |
+          $conf = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $cargo = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($conf -ne $pkg -or $conf -ne $cargo) {
+            throw "Versions disagree: tauri.conf.json $conf, package.json $pkg, Cargo.toml $cargo"
+          }
+          "version=$conf" >> $env:GITHUB_OUTPUT
+
+      - name: Check the tag matches the app version
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ($env:TAG -ne "v$env:VERSION") {
+            throw "Tag $env:TAG doesn't match the app version $env:VERSION"
+          }
+
+      # Runs `npm run build` first (beforeBuildCommand), then the release build and NSIS.
+      - name: Build the installer
+        run: npm run tauri build -- -- --locked
+
+      - name: Checksum
+        id: files
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $exe = "src-tauri/target/release/bundle/nsis/Recast_$($env:VERSION)_x64-setup.exe"
+          if (-not (Test-Path $exe)) { throw "Installer not found: $exe" }
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  $(Split-Path $exe -Leaf)" | Out-File "$exe.sha256" -Encoding ascii -NoNewline
+          "exe=$exe" >> $env:GITHUB_OUTPUT
+          "Built $exe, SHA-256 $hash"
+
+      - id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installer
+          path: |
+            ${{ steps.files.outputs.exe }}
+            ${{ steps.files.outputs.exe }}.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: installer
+          path: installer
+
+      - name: Publish on the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          exe="Recast_${VERSION}_x64-setup.exe"
+          ls -la installer
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$exe"; then
+              echo "::notice::Release $TAG already has $exe; leaving it unchanged."
+              exit 0
+            fi
+            gh release upload "$TAG" "installer/$exe" "installer/$exe.sha256"
+          else
+            gh release create "$TAG" --draft --verify-tag --title "Recast $VERSION" --generate-notes
+            gh release upload "$TAG" "installer/$exe" "installer/$exe.sha256"
+            gh release edit "$TAG" --draft=false
+          fi
