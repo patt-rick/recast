@@ -194,6 +194,9 @@ fn open_now(app: &AppHandle, paths: Vec<String>, mode: PadMode) {
         let _ = app.emit_to(LABEL, "pad://open", &req);
         if mode == PadMode::Drag {
             show_drag(app, &w);
+        } else {
+            // A click-mode open retires any poller left over from an earlier drag-mode open.
+            track_cursor(app, false);
         }
     }
     // Page not ready: `ready` delivers the parked open and, in drag mode, shows it.
@@ -222,6 +225,8 @@ pub fn ready(app: &AppHandle) {
                 && let Some(w) = app.get_webview_window(LABEL)
             {
                 show_drag(app, &w);
+            } else {
+                track_cursor(app, false);
             }
         }
     });

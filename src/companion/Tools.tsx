@@ -39,11 +39,15 @@ export function Tools() {
     try {
       const model = await ipc.inspect(paths);
       // Split takes one PDF: the first one dropped replaces the current choice.
-      const files = id === "split" ? [...model.files.filter((f) => f.kind === "pdf").slice(0, 1), ...model.files.filter((f) => f.kind !== "pdf")] : model.files;
+      const pdfs = model.files.filter((f) => f.kind === "pdf");
+      const files = id === "split" ? [...pdfs.slice(0, 1), ...model.files.filter((f) => f.kind !== "pdf")] : model.files;
       const base = id === "split" ? [] : listsRef.current[id];
       const { items: next, rejected } = accept(files, TOOLS[id].kind, base, newId);
       const msg = rejection(rejected, TOOLS[id].kind);
-      setNote(msg ? { text: msg, error: true } : null);
+      const extra = id === "split" && pdfs.length > 1 ? "Using the first PDF; the others were ignored." : null;
+      setNote(msg ? { text: msg, error: true } : extra ? { text: extra, error: false } : null);
+      // Split with no PDF in the drop or pick: keep the current item.
+      if (id === "split" && pdfs.length === 0) return;
       setLists((all) => ({ ...all, [id]: next }));
     } catch (e) {
       setNote({ text: String(e), error: true });
@@ -101,9 +105,9 @@ export function Tools() {
 
   return (
     <section className={hovering ? "tools drop-hover" : "tools"} aria-label="Tools">
-      <div className="segmented" role="tablist" aria-label="Tool">
+      <div className="segmented" role="group" aria-label="Tool">
         {(Object.keys(TOOLS) as ToolId[]).map((id) => (
-          <button key={id} role="tab" aria-selected={tool === id} className={tool === id ? "nav active" : "nav"}
+          <button key={id} aria-pressed={tool === id} className={tool === id ? "nav active" : "nav"}
             onClick={() => { setTool(id); setNote(null); }}>
             {TOOLS[id].title}
           </button>

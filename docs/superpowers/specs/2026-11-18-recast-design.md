@@ -372,7 +372,7 @@ Nothing outside `platform` may call OS APIs directly.
   - `engines_list()`, `engine_install(id)`, `engine_remove(id)`, `engine_verify(id)`
   - `get_settings()`, `set_settings(patch)`
   - `reveal_job(id)`, `open_job(id)`, `notices()`, `notice_text(index, name)`
-  - `thumbnail(path)` returns bytes (§6.1) and `capture_backdrop()` returns the backdrop wire format (§6.8), both as binary `tauri::ipc::Response`s. `capture_backdrop` refuses any window but the pad.
+  - `thumbnail(path)` returns bytes (§6.1) and `capture_backdrop()` returns the backdrop wire format (§6.8), both as binary `tauri::ipc::Response`s. `capture_backdrop` refuses any window but the pad. Every app command is declared in `build.rs` (so it gets an `allow-<command>` permission) and granted per window: `capabilities/default.json` gives the companion its commands, `capabilities/pad.json` gives the pad only `inspect`, `start_jobs`, `thumbnail`, `capture_backdrop`, `pad_ready`, `pad_show`, `pad_close` and `pad_track_cursor`.
   - Pad window: `pad_ready()` (the page's listeners are registered), `pad_show(generation)`, `pad_close(generation)` and `pad_track_cursor(on, generation)`. Each of the last three is a no-op if `generation` is stale (§6.7).
   - Debug builds only: `debug_open_pad(paths, drag)` opens the pad as a trigger would, for testing. It is refused in release builds, and goes away when Plan 3's real triggers exist.
   - There are deliberately no generic `reveal(path)` or `open(path)` commands, because the webview could pass them any path. `reveal_job` and `open_job` look up the history row and require status `done` and an existing output. `notice_text(index, name)` returns the licence text of a notice (by its index in `notices()`, and fails with "The list changed; reopen Library." if the notice at that index no longer has that name): the installed engine's own licence file (plain text, capped at 512 KB) when present, otherwise the text bundled at `<resource dir>/licenses/` (source: `src-tauri/licenses/`).
@@ -413,7 +413,7 @@ recast/
     bin/7z.exe  7z.dll  7zip-License.txt
     examples/fake_engine.rs      # test engine for the watchdog, kill and runner tests
     tests/engines_integration.rs # real-engine tests (feature `engines`)
-    capabilities/default.json  pad.json  tauri.conf.json   # pad.json: core:default only, for the pad window
+    capabilities/default.json  pad.json  tauri.conf.json   # commands are scoped per window: pad.json grants the pad only inspect, start_jobs, thumbnail, capture_backdrop and the pad_* commands
   scripts/refresh-engines.mjs  fetch-7zip.mjs
   docs/
 ```

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pad-close"
+description = "Enables the pad_close command without any pre-configured scope."
+commands.allow = ["pad_close"]
+
+[[permission]]
+identifier = "deny-pad-close"
+description = "Denies the pad_close command without any pre-configured scope."
+commands.deny = ["pad_close"]

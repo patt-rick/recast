@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-pad-track-cursor"
+description = "Enables the pad_track_cursor command without any pre-configured scope."
+commands.allow = ["pad_track_cursor"]
+
+[[permission]]
+identifier = "deny-pad-track-cursor"
+description = "Denies the pad_track_cursor command without any pre-configured scope."
+commands.deny = ["pad_track_cursor"]

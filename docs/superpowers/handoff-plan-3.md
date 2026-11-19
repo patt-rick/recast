@@ -13,9 +13,10 @@ Paste this into a new session, or say "read docs/superpowers/handoff-plan-3.md a
   - The pad opens from the tray: **Convert files…** (picker, then click mode at the cursor) and **Drop pad** (drag mode, no files). Both are Plan 2 stand-ins.
 - **Tests, all passing:**
   - 175 Rust unit tests
-  - 71+ Vitest tests
+  - 81 Vitest tests
   - 11 real-engine integration tests (including `pdf-extract` and thumbnails)
   - clippy and rustfmt clean
+- **Release build:** the NSIS installer builds (`Recast_0.1.0_x64-setup.exe`, 6.1 MB).
 - **Verified in the running app (2026-11-19)**, through WebView2 CDP and Cua desktop control:
   - the inline ring: light solid look, hover pill, More/Back paging, keyboard focus, Esc
   - the pad window in click mode: Liquid Glass over the captured backdrop, per-segment light/dark adaptation, hover lift, tint and pill, Esc hides the window

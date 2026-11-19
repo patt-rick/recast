@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reveal-job"
+description = "Enables the reveal_job command without any pre-configured scope."
+commands.allow = ["reveal_job"]
+
+[[permission]]
+identifier = "deny-reveal-job"
+description = "Denies the reveal_job command without any pre-configured scope."
+commands.deny = ["reveal_job"]

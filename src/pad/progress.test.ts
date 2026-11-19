@@ -8,6 +8,11 @@ const ev = (job_id: string, status: JobStatus, pct: number | null = null, messag
 });
 
 describe("batch progress", () => {
+  it("treats known-but-empty ids as settled, unknown ids as not", () => {
+    expect(view(withIds(emptyBatch(), [])).settled).toBe(true);
+    expect(view(emptyBatch()).settled).toBe(false);
+  });
+
   it("keeps events that arrive before start_jobs returns the ids", () => {
     let b = withEvent(emptyBatch(), ev("a", "queued"));
     b = withEvent(b, ev("other", "running", 0.5)); // a job from Activity: ignored once ids are known

@@ -1,7 +1,17 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "pad",
-  "description": "Pad window permissions: events, window focus and drag-drop listeners only",
+  "description": "Pad window permissions: events, window focus and drag-drop listeners, and only the app commands the pad calls",
   "windows": ["pad"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "allow-inspect",
+    "allow-start-jobs",
+    "allow-thumbnail",
+    "allow-capture-backdrop",
+    "allow-pad-ready",
+    "allow-pad-show",
+    "allow-pad-close",
+    "allow-pad-track-cursor"
+  ]
 }

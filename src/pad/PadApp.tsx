@@ -7,6 +7,7 @@ import type { PadMode, PadModel, PadOpen } from "../shared/types";
 import { useThumb } from "../shared/useThumb";
 import { armedAfter, outsideDistance } from "./cursor";
 import { prepare, release, type GlassSource } from "./glass/backdrop";
+import { planDrop, type PendingDrop } from "./dropPlan";
 import { hitTest } from "./hitTest";
 import { Ring } from "./Ring";
 import { target } from "./states";
@@ -44,6 +45,11 @@ export function PadApp() {
   const closedGen = useRef(-1);
   /** Leave-to-dismiss arms only after the cursor was inside once (or a drag entered). */
   const armed = useRef(false);
+  /** Number of `begin`s awaiting inspect/capture (Rust shows a drag-mode pad before the session exists). */
+  const beginning = useRef(0);
+  /** A drop that arrived while a begin was in flight with no session; replayed once the session is set. */
+  const pendingDrop = useRef<PendingDrop | null>(null);
+  const dropRef = useRef<(s: Session, x: number, y: number, paths: string[]) => void>(() => {});
 
   useEffect(() => {
     const q = reducedMotionQuery();
@@ -77,7 +83,10 @@ export function PadApp() {
     if (req.generation === closedGen.current) return;
     const key = ++seq.current;
     const waiting = req.mode === "drag" && req.paths.length === 0;
-    const [model, glass] = await Promise.all([
+    beginning.current++;
+    let model: PadModel, glass: GlassSource | null;
+    try {
+      [model, glass] = await Promise.all([
       waiting
         ? Promise.resolve(EMPTY)
         : ipc.inspect(req.paths).catch((e) => {
@@ -90,13 +99,22 @@ export function PadApp() {
             console.warn("backdrop unavailable, using the solid look", e);
             return null;
           }),
-    ]);
+      ]);
+    } finally {
+      beginning.current--;
+    }
     if (key !== seq.current || req.generation === closedGen.current) {
       release(glass);
+      if (beginning.current === 0) pendingDrop.current = null;
       return;
     }
-    setSession({ key, generation: req.generation, paths: req.paths, mode: req.mode, model, glass, waiting });
+    const next: Session = { key, generation: req.generation, paths: req.paths, mode: req.mode, model, glass, waiting };
+    setSession(next);
     padRef.current.open(model, req.paths);
+    // A drop that landed before the session existed: run it now (the reducer handles it after `open`).
+    const early = pendingDrop.current;
+    pendingDrop.current = null;
+    if (early) dropRef.current(next, early.x, early.y, early.paths);
   }, []);
 
   // Listen first, then tell Rust we're ready (it may be holding an open for us).
@@ -108,6 +126,7 @@ export function PadApp() {
         openGen.current = req.generation;
         reducedTransparency.current = req.reduced_transparency;
         armed.current = false;
+        pendingDrop.current = null;
         void begin(req);
       }),
       onPadCursor((p) => {
@@ -128,6 +147,22 @@ export function PadApp() {
       offs.forEach((o) => o.then((f) => f()));
     };
   }, [begin]);
+
+  dropRef.current = (s, x, y, paths) => {
+    ipc.padTrackCursor(false, s.generation).catch(() => {});
+    const hit = hitTest(x, y, s === sessionRef.current ? target(padRef.current.state) : null);
+    const plan = planDrop(s, paths, hit);
+    if (plan === "run-and-keep" || plan === "run-and-close") {
+      padRef.current.dispatch({ type: "drop", hit, at: performance.now() });
+    }
+    if (plan === "run-and-keep") {
+      // Keep the session, but it's a click-mode pad now (Esc and click-outside close it); focus it (A2).
+      setSession((cur) => (cur && cur.generation === s.generation ? { ...cur, mode: "click" } : cur));
+      ipc.padShow(s.generation).catch(() => {});
+    } else if (plan === "reopen") {
+      void begin({ paths, mode: "click", reduced_transparency: !s.glass, generation: s.generation });
+    }
+  };
 
   // Drags over the pad: Over positions drive targeting; Drop runs the targeted segment.
   useEffect(() => {
@@ -152,17 +187,11 @@ export function PadApp() {
       } else if (p.type === "drop") {
         dragging.current = false;
         setExternal(null);
-        if (!s) return;
-        ipc.padTrackCursor(false, s.generation).catch(() => {});
-        const x = p.position.x / scale, y = p.position.y / scale;
-        if (!s.waiting && samePaths(p.paths, s.paths)) {
-          padRef.current.dispatch({ type: "drop", hit: hitTest(x, y, target(padRef.current.state)), at: performance.now() });
-          // Keep the session, but it's a click-mode pad now (Esc and click-outside close it); focus it (A2).
-          setSession((cur) => (cur && cur.generation === s.generation ? { ...cur, mode: "click" } : cur));
-          ipc.padShow(s.generation).catch(() => {});
-        } else if (p.paths.length > 0) {
-          void begin({ paths: p.paths, mode: "click", reduced_transparency: !s.glass, generation: s.generation });
+        if (!s) {
+          if (beginning.current > 0) pendingDrop.current = { x: p.position.x / scale, y: p.position.y / scale, paths: p.paths };
+          return;
         }
+        dropRef.current(s, p.position.x / scale, p.position.y / scale, p.paths);
       }
     });
     return () => {

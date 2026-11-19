@@ -45,7 +45,9 @@ export function view(b: Batch): BatchView {
   const ids = b.ids ?? [];
   const list = ids.map((id) => b.jobs[id]);
   const finished = list.filter((j) => j && ENDED.includes(j.status)).length;
-  const settled = ids.length > 0 && finished === ids.length;
+  // Known-but-empty ids (start_jobs created nothing) is settled: nothing will ever finish.
+  // Unknown ids (null) are not: start_jobs is still in flight.
+  const settled = b.ids !== null && finished === ids.length;
   const bad = list.find((j) => j && BAD.includes(j.status));
   let pct: number | null;
   if (ids.length === 0) pct = null;
