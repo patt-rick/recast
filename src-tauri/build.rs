@@ -19,11 +19,11 @@ const COMMANDS: &[&str] = &[
     "notice_text",
     "notices",
     "pad_ready",
-    "debug_open_pad",
     "pad_show",
     "pad_close",
     "pad_track_cursor",
     "capture_backdrop",
+    "highlight_handle",
 ];
 
 fn main() {

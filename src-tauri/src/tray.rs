@@ -1,4 +1,4 @@
-//! Tray icon: left-click opens the companion; menu has Open and Quit (spec §4.5).
+//! Tray icon: left-click opens the companion; menu has Open, Convert files… and Quit (spec §4.5).
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
@@ -15,8 +15,7 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open Recast", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let convert = MenuItem::with_id(app, "convert", "Convert files…", true, None::<&str>)?;
-    let droppad = MenuItem::with_id(app, "droppad", "Drop pad", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &convert, &droppad, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &convert, &quit])?;
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().cloned().expect("bundle icon"))
         .tooltip("Recast")
@@ -25,8 +24,6 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
         .on_menu_event(|app, e| match e.id.as_ref() {
             "open" => show_companion(app),
             "convert" => pick_and_open_pad(app),
-            // Plan 3's triggers replace this: opens the pad mid-drag mode with no files yet.
-            "droppad" => crate::pad::open(app, vec![], crate::pad::PadMode::Drag),
             "quit" => app.exit(0),
             _ => {}
         })

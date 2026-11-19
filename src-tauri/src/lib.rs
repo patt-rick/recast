@@ -51,6 +51,7 @@ pub fn run() {
         .setup(|app| {
             app_state::setup(app)?;
             pad::init(app.handle());
+            triggers::init(app.handle());
             tray::build(app)?;
             integration::sync_registry(app.handle());
             let argv: Vec<String> = std::env::args_os()
@@ -69,6 +70,16 @@ pub fn run() {
             // A real file drag reaching the pad confirms a shake probe; a drop ends the
             // wait for one (B1). Both arrive here on the main thread, in event order.
             match event {
+                tauri::WindowEvent::DragDrop(ev)
+                    if matches!(window.label(), triggers::HANDLE | triggers::DESK) =>
+                {
+                    triggers::on_drag(window, ev);
+                    return;
+                }
+                tauri::WindowEvent::Moved(pos) if window.label() == triggers::DESK => {
+                    triggers::desk_moved(window.app_handle(), *pos);
+                    return;
+                }
                 tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Enter { paths, .. })
                     if window.label() == pad::LABEL && !paths.is_empty() =>
                 {
@@ -98,6 +109,8 @@ pub fn run() {
                     let _ = window.app_handle().emit_to(pad::LABEL, "pad://dismiss", ());
                     pad::close(window.app_handle());
                 }
+                // The widgets are reused for the whole run, like the pad.
+                triggers::HANDLE | triggers::DESK => api.prevent_close(),
                 _ => {}
             }
         })
@@ -120,11 +133,11 @@ pub fn run() {
             ipc::notice_text,
             ipc::notices,
             ipc::pad_ready,
-            ipc::debug_open_pad,
             ipc::pad_show,
             ipc::pad_close,
             ipc::pad_track_cursor,
             ipc::capture_backdrop,
+            ipc::highlight_handle,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Recast");

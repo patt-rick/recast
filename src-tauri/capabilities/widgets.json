@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "widgets",
+  "description": "Edge handle and desk pad: events, and dragging the desk pad. No app commands.",
+  "windows": ["handle", "deskpad"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-start-dragging"]
+}

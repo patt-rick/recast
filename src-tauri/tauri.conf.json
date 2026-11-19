@@ -36,6 +36,40 @@
         "visible": false,
         "focus": false,
         "dragDropEnabled": true
+      },
+      {
+        "label": "handle",
+        "title": "Recast handle",
+        "url": "widgets.html",
+        "width": 6,
+        "height": 80,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "focusable": false,
+        "dragDropEnabled": true
+      },
+      {
+        "label": "deskpad",
+        "title": "Recast desk pad",
+        "url": "widgets.html",
+        "width": 96,
+        "height": 96,
+        "resizable": false,
+        "maximizable": false,
+        "decorations": false,
+        "transparent": true,
+        "shadow": false,
+        "alwaysOnBottom": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": false,
+        "dragDropEnabled": true
       }
     ],
     "security": { "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'" }

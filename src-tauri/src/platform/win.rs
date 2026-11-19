@@ -40,12 +40,17 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, EVENT_SYSTEM_FOREGROUND, GetClassNameW, GetDesktopWindow, GetForegroundWindow,
-    GetMessageW, GetShellWindow, GetSystemMetrics, GetWindowRect, IsZoomed, MONITORINFOF_PRIMARY,
-    MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SM_SWAPBUTTON, SW_HIDE,
-    SW_SHOWNOACTIVATE, SetTimer, SetWindowDisplayAffinity, SetWindowsHookExW, ShowWindow,
-    UnhookWindowsHookEx, WDA_EXCLUDEFROMCAPTURE, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_TIMER,
+    CallNextHookEx, EVENT_SYSTEM_FOREGROUND, GWL_STYLE, GetClassNameW, GetDesktopWindow,
+    GetForegroundWindow, GetMessageW, GetShellWindow, GetSystemMetrics, GetWindowLongPtrW,
+    GetWindowRect, IsZoomed, MONITORINFOF_PRIMARY, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW,
+    PostThreadMessageW, SM_SWAPBUTTON, SW_HIDE, SW_SHOWNOACTIVATE, SetTimer,
+    SetWindowDisplayAffinity, SetWindowsHookExW, ShowWindow, UnhookWindowsHookEx,
+    WDA_EXCLUDEFROMCAPTURE, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_QUIT, WM_TIMER,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW,
+    SetWindowPos, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
 };
 use windows::core::PCWSTR;
 
@@ -417,6 +422,34 @@ pub fn show_no_activate(hwnd: isize) {
 pub fn hide_window(hwnd: isize) {
     unsafe {
         let _ = ShowWindow(HWND(hwnd as *mut c_void), SW_HIDE);
+    }
+}
+
+/// `style` without the caption and the buttons that go with it.
+fn without_caption(style: u32) -> u32 {
+    style & !(WS_CAPTION.0 | WS_SYSMENU.0 | WS_MINIMIZEBOX.0 | WS_MAXIMIZEBOX.0)
+}
+
+/// Windows keeps a minimum width for any window with `WS_CAPTION`, which tao leaves set
+/// on undecorated windows: a 6 px handle comes out 198 px wide. Dropping the caption
+/// bits lets a widget window be as thin as asked.
+pub fn strip_caption(hwnd: isize) {
+    unsafe {
+        let h = HWND(hwnd as *mut c_void);
+        let style = GetWindowLongPtrW(h, GWL_STYLE);
+        let new = without_caption(style as u32) as isize | (style & !0xFFFF_FFFF);
+        if new != style {
+            SetWindowLongPtrW(h, GWL_STYLE, new);
+            let _ = SetWindowPos(
+                h,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
     }
 }
 
@@ -977,6 +1010,13 @@ mod tests {
         assert_eq!(hkcu_get_string(&key, None), None);
         assert_eq!(hkcu_get_string(&sub, None), None);
         hkcu_delete_tree(&key).unwrap(); // missing is fine
+    }
+
+    #[test]
+    fn caption_bits_come_off_and_the_rest_stay() {
+        // What tao leaves on an undecorated popup: caption, system menu, min/max, clip bits.
+        assert_eq!(without_caption(0x14CB_0000), 0x1400_0000);
+        assert_eq!(without_caption(0x0400_0000), 0x0400_0000);
     }
 
     #[test]

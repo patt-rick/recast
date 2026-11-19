@@ -93,6 +93,35 @@ pub fn handle_rect(edge: Edge, pos: f64, work: Rect, scale: f64) -> Rect {
     }
 }
 
+pub const HANDLE_GROWN_W: f64 = 180.0;
+pub const HANDLE_GROWN_H: f64 = 80.0;
+
+/// The handle window while highlighted (L9): 180 × 80 logical px, anchored on its edge
+/// and growing toward the screen centre, so a "Drag a file here" label fits beside the
+/// tab. The tab is still `HANDLE_SHORT` thick, flush with the edge.
+pub fn handle_rect_highlighted(edge: Edge, pos: f64, work: Rect, scale: f64) -> Rect {
+    let (w, h) = (px(HANDLE_GROWN_W, scale), px(HANDLE_GROWN_H, scale));
+    let base = handle_rect(edge, pos, work, scale);
+    match edge {
+        Edge::Left => Rect { w, h, ..base },
+        Edge::Right => Rect {
+            x: work.right() - w,
+            w,
+            h,
+            ..base
+        },
+        Edge::Top | Edge::Bottom => {
+            let x = base.x.clamp(work.x, (work.right() - w).max(work.x));
+            let y = if edge == Edge::Top {
+                work.y
+            } else {
+                work.bottom() - h
+            };
+            Rect { x, y, w, h }
+        }
+    }
+}
+
 /// Centre for a `pad_px` pad beside the handle, so the handle stays free for a drop.
 /// `pad::place` then clamps it into the work area.
 pub fn pad_anchor_beside(edge: Edge, handle: Rect, pad_px: i32, scale: f64) -> (i32, i32) {
@@ -294,6 +323,60 @@ mod tests {
         assert!(!is_fullscreen(mon, mon, "Progman", false));
         assert!(!is_fullscreen(mon, mon, "WorkerW", false));
         assert!(!is_fullscreen(mon, mon, "Shell_TrayWnd", false));
+    }
+
+    #[test]
+    fn the_highlighted_handle_grows_toward_the_screen_centre_with_its_tab_on_the_edge() {
+        // Left: the tab's top-left stays, the window widens to the right.
+        assert_eq!(
+            handle_rect_highlighted(Edge::Left, 0.5, WORK, 1.0),
+            Rect {
+                x: 0,
+                y: 480,
+                w: 180,
+                h: 80
+            }
+        );
+        // Right: the window's right side stays on the edge.
+        assert_eq!(
+            handle_rect_highlighted(Edge::Right, 0.0, WORK, 1.0),
+            Rect {
+                x: 1740,
+                y: 0,
+                w: 180,
+                h: 80
+            }
+        );
+        // Top: 180 wide along the edge, 80 tall inward, starting where the handle starts.
+        assert_eq!(
+            handle_rect_highlighted(Edge::Top, 0.0, WORK, 1.0),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 180,
+                h: 80
+            }
+        );
+        // Bottom, at the far end: kept inside the work area.
+        assert_eq!(
+            handle_rect_highlighted(Edge::Bottom, 1.0, WORK, 1.0),
+            Rect {
+                x: 1740,
+                y: 960,
+                w: 180,
+                h: 80
+            }
+        );
+        // Scaled.
+        assert_eq!(
+            handle_rect_highlighted(Edge::Left, 0.0, WORK, 2.0),
+            Rect {
+                x: 0,
+                y: 0,
+                w: 360,
+                h: 160
+            }
+        );
     }
 
     #[test]

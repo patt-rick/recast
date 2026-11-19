@@ -64,4 +64,7 @@ pub fn settings_changed(app: &AppHandle, before: &Settings, after: &Settings) {
     {
         sync_registry(app);
     }
+    if before.triggers != after.triggers {
+        crate::triggers::sync(app);
+    }
 }

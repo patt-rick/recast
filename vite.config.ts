@@ -12,7 +12,7 @@ export default defineConfig({
     outDir: "dist",
     rollupOptions: {
       // Relative to the project root; no node imports (there is no @types/node).
-      input: { main: "index.html", pad: "pad.html" },
+      input: { main: "index.html", pad: "pad.html", widgets: "widgets.html" },
     },
   },
   test: { environment: "jsdom", globals: true },
