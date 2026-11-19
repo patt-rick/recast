@@ -59,7 +59,127 @@ It removes Plan 2's stand-ins: the tray **Drop pad** item and the debug-only `de
 
 ## Review amendments (Opus plan review, binding: these override the task text below)
 
-_Filled in after the Opus plan review._
+From the Opus plan review (2026-11-19). Where an amendment and a task's text disagree, the amendment wins. Each amendment names the task it changes.
+
+**B1. Confirm a probe and record drops in Rust, not over IPC (H1; Tasks 4 and 7).** `WindowEvent::DragDrop` reaches `on_window_event` for the pad window too (`tauri-runtime-wry-2.12.5/src/lib.rs:4812-4815`).
+- In `lib.rs` `on_window_event`, add two arms before the widget arm:
+  - `WindowEvent::DragDrop(DragDropEvent::Enter { paths, .. }) if window.label() == pad::LABEL && !paths.is_empty() => pad::drag_entered(window.app_handle())`
+  - `WindowEvent::DragDrop(DragDropEvent::Drop { .. }) if window.label() == pad::LABEL => pad::dropped(window.app_handle())`
+- These run on the main thread in event order:
+  - `pad::drag_entered` locks `Inner` and calls `confirm(generation)` for the current generation, with `log::info!("pad: drag entered")`.
+  - `pad::dropped` sets `Inner.dropped = true`.
+- `Inner` gains `dropped: bool`, cleared by `begin` and `end`. `dragging(g)` becomes `is_current(g) && mode == Some(Drag) && !dropped`. Add unit tests for both.
+- **Drop** the `pad_drag_entered` command entirely, with its `build.rs` entry, capability, `ipc.ts` wrapper and the `padDragEntered` call.
+- In `PadApp`'s `enter` branch, the only probe logic is `if (sessionRef.current?.probe && p.paths.length === 0) return;`, placed **before** the existing early return. Everything else stays as it was in Plan 2.
+
+**B2. Release grace applies to every drag-mode open and doesn't depend on the hook (H2; Tasks 4, 6 and 7).**
+1. `PadOpen` (Rust and TS) gains `armed: bool`. Rust sets it to `anchor.is_some()`. `PadApp`'s `onPadOpen` sets `armed.current = req.armed` instead of `false`.
+2. `platform::left_button_down() -> bool`:
+   - `GetAsyncKeyState(VK_LBUTTON)`, or `VK_RBUTTON` when `GetSystemMetrics(SM_SWAPBUTTON) != 0`.
+   - The button is down when `& 0x8000 != 0`.
+   - Add the `windows` feature `Win32_UI_Input_KeyboardAndMouse`.
+3. Add a pure `fn grace_due(up_since_ms: Option<u64>, now_ms: u64) -> bool` (`>= RELEASE_GRACE_MS`) in `pad.rs`, with a test.
+4. The 60 Hz cursor poller also:
+   - samples `left_button_down()`
+   - keeps `up_since` (reset to None while the button is down)
+   - when `grace_due` and `dragging(start_generation)`, emits `pad://dismiss` and calls `close_if_current(start_generation)`, then stops
+
+   Give the poller the generation it serves: `track_cursor(app, on)` takes the current generation.
+5. Remove `Shake::Released`, `release_grace`, `from_shake` and `shake_drag`. Keep `PadOpen.probe` and the probe timer. `Detector::feed` returns only `None` or `Armed`, so update its tests and drop the `Released` expectations.
+
+**B3. Fix the debounce test (H3; Task 2).** Replace the "steady trickle" block of `collector_slides_300ms_and_caps_at_2s` with:
+```rust
+        let mut flushed = None;
+        for i in 0..20u64 {
+            let now = ms(1000 + i * 150);
+            if let Some(v) = c.take_if_due(now) { flushed = Some(v); break; }
+            c.push(vec![format!("f{i}")], now);
+            if i == 0 { assert_eq!(c.deadline(), Some(ms(1300))); }
+        }
+        assert_eq!(flushed.map(|v| v.len()), Some(14)); // f0..f13, flushed at t=3100 ≥ cap 3000
+```
+
+**B4. An upgrade must not wipe engines and history (H4; Task 12; spec deviation 12).**
+- Tauri's reinstall page runs the old uninstaller **without** `/UPDATE` on a manual upgrade, so `$UpdateMode` can't protect data.
+- Change `hooks.nsh` to always remove the verb, `"$LOCALAPPDATA\Recast\logs"` and `"$LOCALAPPDATA\Recast\tmp"`.
+- Remove `"$LOCALAPPDATA\Recast"` and `"$APPDATA\Recast"` **only when `$DeleteAppDataCheckboxState = 1`** (and not in update mode).
+- Record this in the spec §6.12 as deviation 12 ("engines and history are kept unless Delete app data is ticked, so an upgrade keeps them"), and flag it to the owner in the final report.
+
+**B5. Keep the mouse hook callback minimal (M1; Tasks 6 and 7).**
+- `ll_mouse` does `try_lock` on a `Sender<MouseEvent>`, then `send`. Nothing else.
+- `MouseHook::start(sink)` spawns a **worker** thread that owns the receiver and runs `sink` for each event.
+- `Drop` posts `WM_QUIT`, joins the hook thread, clears the sender (which ends the worker) and joins the worker.
+- The detector, `is_open`, `fullscreen_on`, logging and `open_probe` all run on the worker, never in the hook callback.
+
+**B6. Register `Forwarder` before the plugin (M2; Task 3).**
+- Use `.manage(shell::Forwarder::default())` on the `tauri::Builder` **before** `.plugin(tauri_plugin_single_instance::init(...))`.
+- `forward` uses `app.state::<Forwarder>()` with no fallback.
+- Remove the `manage` call from `setup`.
+
+**B7. A late flush adds to the pad (M3; Tasks 2 and 3).**
+- `Forwarder` keeps `last: Option<(Vec<String>, Instant)>`. A flush within `CAP` (2 s) of the previous one opens the pad with `last ∪ new` (order kept, duplicates removed).
+- Implement this as the pure `fn merge_recent(prev: Option<(&[String], Instant)>, new: Vec<String>, now: Instant) -> Vec<String>` in `shell.rs`, with a test: within 2 s it merges, after 2 s it doesn't.
+
+**B8. A maximized window is not fullscreen (M4; Tasks 5 and 6).**
+- `ForegroundInfo` gains `zoomed: bool` (`IsZoomed(h).as_bool()`), and `is_fullscreen(window, monitor, class, zoomed)` returns false when `zoomed` is set.
+- Tests: change the `(-8,-8,1936,1096)` case to `zoomed = false` and keep it true. Add `assert!(!is_fullscreen(Rect{x:-8,y:-8,w:1936,h:1096}, mon, "CabinetWClass", true));`.
+
+**B9. Desk-pad positions on other monitors (M5; Tasks 5 and 7).**
+- "Unset" means exactly `sx == -1.0 && sy == -1.0` in `desk_position` and in `place_desk`.
+- `place_desk` looks up `monitor_from_point(sx, sy)` and falls back to `primary_work` when that returns None.
+- Add the test `assert_eq!(desk_position(-1200.0, -40.0, Rect{x:-2560,y:-1440,w:2560,h:1400}, 1.0), (-1200, -40));`.
+
+**B10. Tell the page when Rust closes the pad (M6; Task 4).** Every close Rust starts itself (the probe timeout and the release grace from B2) emits `pad://dismiss` to `pad::LABEL` right before `close_now(app, Some(g))`.
+
+**B11. Apply settings in order (M7; Tasks 3 and 7).**
+- `triggers::sync(app)` takes no settings argument. Its `run_on_main_thread` closure reads `settings(&app)`, and `set_shake` reads the current setting while holding the `TriggerState` lock.
+- `integration::sync_registry()` takes no argument, reads `settings_now()`, and runs under a `static REG: Mutex<()>`.
+- `settings_changed` keeps its comparisons and calls these argument-free versions.
+
+**B12. Re-place the widgets when the screen layout changes (M8; Task 7).**
+- `TriggerState` stores the last placed `(primary work Rect, scale)` and the desk pad's `(work Rect, scale)`.
+- `tick` recomputes them. When they differ, it re-runs `place_handle` and `place_desk` on the main thread.
+
+**B13. Check the probe on real hardware early (M9; Task 4).** Add Step 5b: build, start the app with shake on, then do a real Explorer file drag and shake it.
+- **Pass:** the log line `pad: drag entered` (from B1) appears, and the pad becomes visible.
+- **If it fails:** give `.pad-body` a `rgba(0,0,0,0.004)` background while probing, and retest.
+
+This needs the human owner's hands. If no human is available, record "unverified" in the report and in the QA checklist, and carry on.
+
+**B14. A shake while a pad is open reuses it (M10; Task 7, spec §4.3).** `on_shake` ignores the shake only when the current pad is `dragging` (drag mode, no drop yet, see B1/B2). Otherwise it calls `open_probe`, which replaces the open pad.
+- This needs `pad::is_waiting_for_drop(app) -> bool`.
+- Remove the `pad::is_open` check from `on_shake`.
+
+**B15. Low findings, all binding:**
+- **L1.** Add `src-tauri/permissions` to the `git add` of every task that adds a command (Tasks 7 and 10).
+- **L2.** `capabilities/widgets.json` permissions become `["core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-start-dragging"]`. Also check that `getCurrentWindow().label` needs no extra permission (it doesn't: the label is injected).
+- **L3.** `setup` reads argv with `std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect()`.
+- **L4.** In the single-instance callback, do nothing when `launch.autostart`. Only a plain second launch shows the companion.
+- **L5.** Shake tests:
+  - `vertical_shaking_does_not_arm` adds ±15 px x jitter.
+  - Add "two fast reversals, a 600 ms pause, one more reversal: no arm".
+  - Add "a diagonal shake with ≥40 px horizontal strokes arms".
+  - `MIN_STROKE_PX` stays in physical px. Record that as spec deviation 13 ("about 20 logical px at 200%").
+- **L6.** Extract the drag-enter decision into a pure `src/pad/enter.ts` `enterAction(session, openGen, paths): "ignore" | "track" | "rebegin"` with Vitest tests, and use it in `PadApp`.
+- **L7.** `perform(Act::InstallEngine(id))` first clears that engine's `FailureNotices` entry (`AppState` gains `reset_engine_notice(id)`, so move `FailureNotices` into `AppState` behind a `Mutex`). A retry that fails again then notifies again.
+- **L8.** `TriggerState` remembers the last position `place_desk` set. `desk_moved` ignores a `Moved` event equal to it, so the default spot is never saved as a user choice.
+- **L9.** Show the "Drag a file here" label on screen as well: while highlighted, `Widget` renders a small label inside the handle window. For that, `triggers::highlight(on)` enlarges the handle window to 180 × 80 logical px toward the screen centre, with a transparent area plus the label, and `place_handle` restores it when `on = false`.
+- **L10.** Use `tauri::include_image!("icons/tray-dark-taskbar.png")` / `include_image!("icons/tray-light-taskbar.png")` (paths relative to `src-tauri`) instead of the `image-png` feature. `glyph` returns `Image<'static>` without a `Result`, and the decode test becomes a size check.
+- **L11.** Every message loop is `while GetMessageW(...).0 > 0 {}`.
+- **L12.** The QA checklist adds:
+  - Win+D with the desk pad
+  - auto-hide taskbar
+  - taskbar moved
+  - display, DPI or monitor-layout change
+  - notification clicks in a release install (dev builds have no AUMID)
+  - a manual upgrade over a previous install keeps engines and history (B4)
+  - the shake probe on real hardware (B13)
+- **L13.** Task 7's file list includes `src/shared/ipc.ts`. Task 8's existing notifier tests compare fields and need no changes.
+
+**New spec deviations from these amendments (fold in during Task 12):**
+- 12: B4, upgrades keep engines and history.
+- 13: L5, shake strokes are measured in physical px.
+- 14: B2, the 1.5 s release grace applies to every drag-mode pad, not only shake opens.
 
 ## File structure
 
