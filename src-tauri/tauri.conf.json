@@ -13,6 +13,7 @@
     "windows": [
       {
         "label": "companion",
+        "create": false,
         "title": "Recast",
         "width": 760,
         "height": 520,
@@ -23,6 +24,7 @@
       },
       {
         "label": "pad",
+        "create": false,
         "title": "Recast pad",
         "url": "pad.html",
         "width": 440,
@@ -39,6 +41,7 @@
       },
       {
         "label": "handle",
+        "create": false,
         "title": "Recast handle",
         "url": "widgets.html",
         "width": 6,
@@ -56,6 +59,7 @@
       },
       {
         "label": "deskpad",
+        "create": false,
         "title": "Recast desk pad",
         "url": "widgets.html",
         "width": 96,
@@ -72,7 +76,7 @@
         "dragDropEnabled": true
       }
     ],
-    "security": { "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'" }
+    "security": { "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'" }
   },
   "bundle": {
     "active": true,

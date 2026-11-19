@@ -100,12 +100,12 @@ impl Targets {
     }
 }
 
+#[derive(Default)]
 pub struct Toasts(Mutex<Targets>);
 
 /// Register the button sets and the action handler. Call in setup, before any
 /// notification: the plugin shows buttons only once a handler exists.
 pub fn init(app: &AppHandle) {
-    app.manage(Toasts(Mutex::new(Targets::default())));
     let a = |id: &str, title: &str| Action::builder(id, title).build();
     let t = |id: &str, actions: Vec<Action>| ActionType::builder(id).actions(actions).build();
     let n = app.notification();

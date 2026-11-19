@@ -1,6 +1,7 @@
 pub mod app_state;
 pub mod backdrop;
 pub mod detect;
+pub mod drops;
 pub mod engines;
 pub mod fsutil;
 pub mod history;
@@ -32,6 +33,11 @@ pub fn run() {
     tauri::Builder::default()
         // Managed before the plugin so its callback always finds it (B6).
         .manage(shell::Forwarder::default())
+        // Every state an IPC command or window event can reach exists before any window
+        // does; AppState follows in setup, and the windows only after it.
+        .manage(pad::PadState::default())
+        .manage(triggers::TriggerState::default())
+        .manage(toast::Toasts::default())
         // Must be the first plugin. A second copy would mark this copy's running jobs
         // INTERRUPTED and delete their temp dirs; instead it forwards its arguments here.
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
@@ -59,8 +65,18 @@ pub fn run() {
         .setup(|app| {
             app_state::setup(app)?;
             toast::init(app.handle());
+            drops::init(app.handle());
+            // The windows are `create: false` in tauri.conf.json: Tauri would build them
+            // before this closure runs, and a page that loads at once (a release build)
+            // would then call commands whose state doesn't exist yet. (A second launch
+            // forwarded while the companion itself is being built finds no window to
+            // show; `--pad` launches are deferred and unaffected.)
+            for cfg in app.config().app.windows.clone() {
+                tauri::WebviewWindowBuilder::from_config(app.handle(), &cfg)?.build()?;
+            }
             pad::init(app.handle());
             triggers::init(app.handle());
+            drops::cover_soon(app.handle());
             tray::build(app)?;
             // Failures are logged inside; startup has nobody to tell.
             let _ = integration::sync_registry(app.handle());
@@ -77,29 +93,14 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // A real file drag reaching the pad confirms a shake probe; a drop ends the
-            // wait for one (B1). Both arrive here on the main thread, in event order.
             match event {
-                tauri::WindowEvent::DragDrop(ev)
-                    if matches!(window.label(), triggers::HANDLE | triggers::DESK) =>
-                {
-                    triggers::on_drag(window, ev);
+                // Drags wry delivers; Recast's own drop targets end up in `dispatch` too.
+                tauri::WindowEvent::DragDrop(ev) => {
+                    drops::dispatch(window, ev);
                     return;
                 }
                 tauri::WindowEvent::Moved(pos) if window.label() == triggers::DESK => {
                     triggers::desk_moved(window.app_handle(), *pos);
-                    return;
-                }
-                tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Enter { paths, .. })
-                    if window.label() == pad::LABEL && !paths.is_empty() =>
-                {
-                    pad::drag_entered(window.app_handle());
-                    return;
-                }
-                tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { .. })
-                    if window.label() == pad::LABEL =>
-                {
-                    pad::dropped(window.app_handle());
                     return;
                 }
                 _ => {}

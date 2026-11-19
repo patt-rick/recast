@@ -187,9 +187,8 @@ fn raw_hwnd(w: &tauri::WebviewWindow) -> Option<isize> {
     w.hwnd().ok().map(|h| h.0 as isize)
 }
 
-/// Exclude the pad from capture once, at startup.
+/// Exclude the pad from capture once, at startup. `PadState` is managed on the Builder.
 pub fn init(app: &AppHandle) {
-    app.manage(PadState::default());
     if let Some(w) = app.get_webview_window(LABEL)
         && let Some(h) = raw_hwnd(&w)
         && let Err(e) = platform::exclude_from_capture(h)
@@ -372,6 +371,8 @@ fn show_drag(app: &AppHandle, w: &tauri::WebviewWindow, generation: u64) {
             let _ = w.show();
         }
     }
+    // A drag-mode pad (a shake probe above all) is only of use if the drag can reach it.
+    crate::drops::cover_soon(app);
     track_cursor(app, true, generation);
 }
 

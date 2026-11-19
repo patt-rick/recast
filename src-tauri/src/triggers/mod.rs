@@ -60,9 +60,9 @@ fn settings(app: &AppHandle) -> Settings {
     app.state::<AppState>().settings_now()
 }
 
-/// Startup: create the trigger state, apply the settings, start the foreground watcher.
+/// Startup: apply the settings, start the foreground watcher. `TriggerState` is managed
+/// on the Builder.
 pub fn init(app: &AppHandle) {
-    app.manage(TriggerState::default());
     // The handle must be thinner than a captioned window may be (see `strip_caption`).
     for label in [HANDLE, DESK] {
         if let Some(h) = app.get_webview_window(label).and_then(|w| w.hwnd().ok()) {
@@ -213,6 +213,7 @@ fn set_visible(app: &AppHandle, label: &str, on: bool) {
     let h = h.0 as isize;
     if on {
         platform::show_no_activate(h);
+        crate::drops::cover_soon(app);
     } else {
         let _ = w.hide();
         platform::hide_window(h);
@@ -276,6 +277,8 @@ fn tick(app: &AppHandle) {
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         let app = app2;
+        // Covers input windows WebView2 created or re-created since the last tick.
+        crate::drops::cover(&app);
         let s = settings(&app);
         let (hide_changed, handle_stale, desk_stale) = {
             let st = app.state::<TriggerState>();

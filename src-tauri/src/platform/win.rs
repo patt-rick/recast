@@ -8,9 +8,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError, mpsc};
 
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_FILE_NOT_FOUND, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, RECT,
-    STILL_ACTIVE, WAIT_OBJECT_0, WIN32_ERROR, WPARAM,
+    CloseHandle, ERROR_FILE_NOT_FOUND, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL,
+    RECT, STILL_ACTIVE, WAIT_OBJECT_0, WIN32_ERROR, WPARAM,
 };
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, GetMonitorInfoW,
@@ -19,6 +20,9 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetDiskFreeSpaceExW, GetFileAttributesW,
     INVALID_FILE_ATTRIBUTES, MOVE_FILE_FLAGS, MoveFileExW, SetFileAttributesW,
+};
+use windows::Win32::System::Com::{
+    CoTaskMemFree, DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL,
 };
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
@@ -29,10 +33,15 @@ use windows::Win32::System::JobObjects::{
     SetInformationJobObject, TerminateJobObject,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Ole::{
+    CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, IDropTarget, IDropTarget_Impl,
+    RegisterDragDrop, ReleaseStgMedium,
+};
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegDeleteTreeW,
     RegGetValueW, RegSetKeyValueW,
 };
+use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::System::Threading::{
     GetCurrentThreadId, GetExitCodeProcess, OpenProcess, OpenThread,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME,
@@ -43,6 +52,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
 };
 use windows::Win32::UI::Shell::{ABM_GETAUTOHIDEBAREX, APPBARDATA, SHAppBarMessage};
+use windows::Win32::UI::Shell::{
+    DragQueryFileW, HDROP, IShellItemArray, SHCreateShellItemArrayFromDataObject, SIGDN_FILESYSPATH,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, EVENT_SYSTEM_FOREGROUND, GWL_STYLE, GetClassNameW, GetDesktopWindow,
     GetForegroundWindow, GetMessageW, GetShellWindow, GetWindowLongPtrW, GetWindowRect, IsZoomed,
@@ -51,11 +63,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     UnhookWindowsHookEx, WDA_EXCLUDEFROMCAPTURE, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_TIMER,
 };
+use windows::Win32::UI::WindowsAndMessaging::{EnumChildWindows, GetPropW};
 use windows::Win32::UI::WindowsAndMessaging::{
     SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW,
     SetWindowPos, WS_CAPTION, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
 };
 use windows::core::PCWSTR;
+use windows::core::w;
 
 /// `CREATE_NO_WINDOW`: engine consoles never flash on screen.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -835,6 +849,258 @@ pub fn taskbar_is_light() -> bool {
     hkcu_dword(PERSONALIZE, "SystemUsesLightTheme") == Some(1)
 }
 
+// ---- File drops onto WebView2 windows -------------------------------------------------
+//
+// wry registers its OLE drop target once, when a webview is created, on the child windows
+// that exist at that moment. For Recast's transparent windows (pad, handle, desk pad)
+// WebView2 creates its input window (`Chrome_RenderWidgetHostHWND`) later, so it has no drop
+// target, and OLE delivers a drag over it to nobody: no trigger ever saw a file drag. Recast
+// covers such windows with its own target, a port of wry's (wry 0.57.2
+// src/webview2/drag_drop.rs). Windows that already have a target (wry's) are left alone.
+
+/// A file drag over a covered window. Positions are physical px in the top-level
+/// window's client area, as wry reports them.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DropEvent {
+    Enter {
+        paths: Vec<std::path::PathBuf>,
+        x: f64,
+        y: f64,
+    },
+    Over {
+        x: f64,
+        y: f64,
+    },
+    Drop {
+        paths: Vec<std::path::PathBuf>,
+        x: f64,
+        y: f64,
+    },
+    Leave,
+}
+
+/// Receives the events of one covered window. Called on the main (OLE) thread, inside the
+/// drag's COM call: it must only hand the event on, never act on it there.
+pub type DropSink = std::rc::Rc<dyn Fn(DropEvent)>;
+
+#[windows_core::implement(IDropTarget)]
+struct DropTarget {
+    top: HWND,
+    sink: DropSink,
+    /// The drag that entered carries file paths.
+    valid: std::cell::Cell<bool>,
+}
+
+/// The file-system paths `data` carries: CF_HDROP, else the shell item array (Explorer
+/// can't build CF_HDROP when a path is MAX_PATH or longer). Empty for text, links and
+/// virtual items.
+fn drop_paths(data: Option<&IDataObject>) -> Vec<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    let Some(data) = data else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    let format = FORMATETC {
+        cfFormat: CF_HDROP.0,
+        ptd: std::ptr::null_mut(),
+        dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1,
+        tymed: TYMED_HGLOBAL.0 as u32,
+    };
+    unsafe {
+        if let Ok(mut medium) = data.GetData(&format)
+            && medium.tymed == TYMED_HGLOBAL.0 as u32
+        {
+            let hdrop = HDROP(medium.u.hGlobal.0 as _);
+            let count = DragQueryFileW(hdrop, u32::MAX, None);
+            for i in 0..count {
+                let len = DragQueryFileW(hdrop, i, None) as usize;
+                let mut buf = vec![0u16; len + 1];
+                DragQueryFileW(hdrop, i, Some(&mut buf));
+                paths.push(std::ffi::OsString::from_wide(&buf[..len]).into());
+            }
+            // The medium belongs to us now (GetData); release it as documented.
+            ReleaseStgMedium(&mut medium);
+            return paths;
+        }
+        let Ok(items) = SHCreateShellItemArrayFromDataObject::<_, IShellItemArray>(data) else {
+            return paths;
+        };
+        for i in 0..items.GetCount().unwrap_or(0) {
+            let Ok(item) = items.GetItemAt(i) else {
+                continue;
+            };
+            // Fails for items with no file-system path (virtual or device items).
+            let Ok(name) = item.GetDisplayName(SIGDN_FILESYSPATH) else {
+                continue;
+            };
+            paths.push(std::ffi::OsString::from_wide(name.as_wide()).into());
+            CoTaskMemFree(Some(name.0 as _));
+        }
+    }
+    paths
+}
+
+/// COPY if the source allows it, else NONE. Never MOVE: Recast converts, it doesn't take
+/// the file, and a MOVE effect would make Explorer delete the original.
+fn copy_effect(allowed: *mut DROPEFFECT) -> DROPEFFECT {
+    let allowed = if allowed.is_null() {
+        DROPEFFECT_NONE
+    } else {
+        unsafe { *allowed }
+    };
+    DROPEFFECT(allowed.0 & DROPEFFECT_COPY.0)
+}
+
+impl DropTarget_Impl {
+    fn client(&self, pt: &POINTL) -> (f64, f64) {
+        let mut p = POINT { x: pt.x, y: pt.y };
+        let _ = unsafe { ScreenToClient(self.top, &mut p) };
+        (p.x as f64, p.y as f64)
+    }
+}
+
+#[allow(non_snake_case)]
+impl IDropTarget_Impl for DropTarget_Impl {
+    fn DragEnter(
+        &self,
+        pdataobj: windows_core::Ref<'_, IDataObject>,
+        _grfkeystate: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        pdweffect: *mut DROPEFFECT,
+    ) -> windows_core::Result<()> {
+        let paths = drop_paths(pdataobj.as_ref());
+        let effect = if paths.is_empty() {
+            DROPEFFECT_NONE
+        } else {
+            copy_effect(pdweffect)
+        };
+        // Only a drag that can actually land here counts: one with paths whose source
+        // allows a copy. A new Enter without a Leave closes the previous one first.
+        let valid = effect != DROPEFFECT_NONE;
+        if self.valid.replace(valid) {
+            (self.sink)(DropEvent::Leave);
+        }
+        if !pdweffect.is_null() {
+            unsafe { *pdweffect = effect };
+        }
+        if valid {
+            let (x, y) = self.client(pt);
+            (self.sink)(DropEvent::Enter { paths, x, y });
+        }
+        Ok(())
+    }
+
+    fn DragOver(
+        &self,
+        _grfkeystate: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        pdweffect: *mut DROPEFFECT,
+    ) -> windows_core::Result<()> {
+        let effect = if self.valid.get() {
+            let (x, y) = self.client(pt);
+            (self.sink)(DropEvent::Over { x, y });
+            copy_effect(pdweffect)
+        } else {
+            DROPEFFECT_NONE
+        };
+        if !pdweffect.is_null() {
+            unsafe { *pdweffect = effect };
+        }
+        Ok(())
+    }
+
+    fn DragLeave(&self) -> windows_core::Result<()> {
+        if self.valid.replace(false) {
+            (self.sink)(DropEvent::Leave);
+        }
+        Ok(())
+    }
+
+    fn Drop(
+        &self,
+        pdataobj: windows_core::Ref<'_, IDataObject>,
+        _grfkeystate: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        pdweffect: *mut DROPEFFECT,
+    ) -> windows_core::Result<()> {
+        let effect = if self.valid.replace(false) {
+            let paths = drop_paths(pdataobj.as_ref());
+            let (x, y) = self.client(pt);
+            (self.sink)(DropEvent::Drop { paths, x, y });
+            copy_effect(pdweffect)
+        } else {
+            DROPEFFECT_NONE
+        };
+        if !pdweffect.is_null() {
+            unsafe { *pdweffect = effect };
+        }
+        Ok(())
+    }
+}
+
+thread_local! {
+    /// Windows whose registration failed and was logged (main thread only).
+    static REGISTER_FAILED: std::cell::RefCell<std::collections::HashSet<isize>> =
+        std::cell::RefCell::default();
+}
+
+/// Every descendant of `top`, depth first.
+fn descendants(top: HWND) -> Vec<HWND> {
+    unsafe extern "system" fn push(h: HWND, l: LPARAM) -> windows_core::BOOL {
+        unsafe { (*(l.0 as *mut Vec<HWND>)).push(h) };
+        true.into()
+    }
+    let mut out: Vec<HWND> = Vec::new();
+    unsafe {
+        let _ = EnumChildWindows(Some(top), Some(push), LPARAM(&mut out as *mut _ as isize));
+    }
+    out
+}
+
+/// Register a drop target on every descendant of `top` that has none, sending its events
+/// to `sink`. Returns what it registered, as "class hwnd" strings, for the log.
+///
+/// Call on the main thread: OLE calls the targets back on the thread that registered them.
+/// Already-registered windows (wry's) are skipped, so calling this again is cheap and
+/// registers nothing twice. A covered window that WebView2 later destroys keeps its target
+/// object alive (one small leak per destroyed window); its replacement is covered by the
+/// next call.
+pub fn cover_drop_targets(top: isize, sink: &DropSink) -> Vec<String> {
+    let top = HWND(top as *mut c_void);
+    let mut done = Vec::new();
+    for h in descendants(top) {
+        let has_target = unsafe { !GetPropW(h, w!("OleDropTargetInterface")).is_invalid() };
+        if has_target {
+            continue;
+        }
+        let target: IDropTarget = DropTarget {
+            top,
+            sink: sink.clone(),
+            valid: false.into(),
+        }
+        .into();
+        match unsafe { RegisterDragDrop(h, &target) } {
+            Ok(()) => {
+                let mut buf = [0u16; 128];
+                let n = unsafe { GetClassNameW(h, &mut buf) }.max(0) as usize;
+                done.push(format!(
+                    "{} {:#x}",
+                    String::from_utf16_lossy(&buf[..n]),
+                    h.0 as usize
+                ));
+            }
+            Err(e) => {
+                // Retried every tick; say so once per window.
+                if REGISTER_FAILED.with(|f| f.borrow_mut().insert(h.0 as isize)) {
+                    log::warn!("drops: registering on {:#x} failed: {e}", h.0 as usize);
+                }
+            }
+        }
+    }
+    done
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1107,6 +1373,69 @@ mod tests {
     fn foreground_info_reads_without_panicking() {
         if let Some(f) = foreground_info() {
             assert!(f.monitor[2] > f.monitor[0] && f.monitor[3] > f.monitor[1]);
+        }
+    }
+
+    #[test]
+    fn copy_effect_never_offers_move() {
+        let mut all = DROPEFFECT(DROPEFFECT_COPY.0 | 2 /* MOVE */ | 4 /* LINK */);
+        assert_eq!(copy_effect(&mut all), DROPEFFECT_COPY);
+        let mut move_only = DROPEFFECT(2);
+        assert_eq!(copy_effect(&mut move_only), DROPEFFECT_NONE);
+        assert_eq!(copy_effect(std::ptr::null_mut()), DROPEFFECT_NONE);
+    }
+
+    #[test]
+    fn uncovered_children_get_a_drop_target_once() {
+        use windows::Win32::System::Ole::{OleInitialize, OleUninitialize, RevokeDragDrop};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_CHILD, WS_OVERLAPPEDWINDOW,
+        };
+        unsafe {
+            OleInitialize(None).unwrap();
+            let top = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("recast drop test"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                100,
+                100,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let child = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!(""),
+                WS_CHILD,
+                0,
+                0,
+                50,
+                50,
+                Some(top),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+            let sink: DropSink = std::rc::Rc::new(|_| {});
+            let first = cover_drop_targets(top.0 as isize, &sink);
+            assert_eq!(first.len(), 1, "the child is covered: {first:?}");
+            assert!(first[0].starts_with("Static"), "{first:?}");
+            assert!(!GetPropW(child, w!("OleDropTargetInterface")).is_invalid());
+            assert!(
+                cover_drop_targets(top.0 as isize, &sink).is_empty(),
+                "a covered window is not registered twice"
+            );
+            let _ = RevokeDragDrop(child);
+            let _ = DestroyWindow(child);
+            let _ = DestroyWindow(top);
+            OleUninitialize();
         }
     }
 }
