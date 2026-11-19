@@ -1,7 +1,7 @@
 # Recast — Design Spec
 
 - **Date:** 2026-11-18
-- **Status:** Draft, revised after Opus adversarial review. Plans 1 (core: engines, presets, jobs, history, settings, companion window) and 2 (drop pad, backdrop, thumbnails, Tools page) are implemented, and this spec was updated to match what was built. Plan 3 (triggers, shell, first run, installer hooks) is still to do.
+- **Status:** Draft, revised after Opus adversarial review. Plans 1 (core: engines, presets, jobs, history, settings, companion window), 2 (drop pad, backdrop, thumbnails, Tools page) and 3 (triggers, shell and single instance, notification buttons, tray glyphs, Open in Recast, trigger settings, first run, installer hooks) are implemented, and this spec was updated to match what was built. What remains is the release and the manual QA in `docs/qa-checklist.md`.
 - **Platform (v1):** Windows 10 (2004+) and Windows 11, x64
 - **Visual reference:** `docs/mockups/pad-liquid-glass.html`, variant 4 ("Regular, adapting"). It was built inside the brainstorm companion frame, so open it there for full styling. The geometry and effect values are copied into §4.4.
 
@@ -70,10 +70,10 @@ Recast is **not a fork**. It shares no code with File Converter and is not bound
 
 | Trigger | Default | Behaviour |
 |---|---|---|
-| **Edge handle** | On | A 6 × 80 px translucent tab docked to a screen edge (**left**, at 50% height by default, so it doesn't cover maximized windows' scrollbars; edge and position are configurable; primary monitor). It **auto-hides while the foreground window is fullscreen**. A drag entering it opens the pad anchored next to the handle. A drop on the handle itself (without moving onto the pad) opens the pad in click mode with those files. |
-| **Desktop pad** | Off | A 96 px round glass widget sitting at desktop level (not always-on-top), draggable, position remembered. A drag entering it opens the pad over it. |
-| **Shake while dragging** | On (heuristic) | While the left button is held and the pointer is moving, **≥3 horizontal direction reversals within 500 ms, each ≥40 px**, arm the trigger. The pad opens only if the system shows a drag cursor or a `DragEnter` reaches a Recast window **within 300 ms**, so text selection, painting, games and Aero Shake don't open it. The trigger is **disabled while a fullscreen app is in the foreground**. If no drop arrives within 1.5 s of the button being released, the pad closes on its own. This is a heuristic and is treated as one in the plan and the QA checklist. |
-| **"Open with Recast"** (Explorer) | On | Opens the pad at the cursor with the selection preloaded. Segments are then **clicked** rather than dropped on. |
+| **Edge handle** | On | A 6 × 80 px translucent tab docked to a screen edge (**left**, at 50% height by default, so it doesn't cover maximized windows' scrollbars; edge and position are configurable). It lives on the **primary monitor's work area**. It **auto-hides while the foreground window covers the primary monitor in fullscreen** (a maximized window doesn't count, and neither do the shell windows `Progman`, `WorkerW`, `Shell_TrayWnd` and `Shell_SecondaryTrayWnd`). When an **auto-hide taskbar** sits on the same edge, the handle stands 2 px off that edge so it doesn't cover the bar's reveal strip. A drag entering it opens the pad anchored **beside** the handle (12 px away, not centred on the cursor), so the handle stays reachable for a drop. A drop on the handle itself (without moving onto the pad) opens the pad in click mode with those files. |
+| **Desktop pad** | Off | A 96 logical px round widget sitting at desktop level (not always-on-top, so Win+D hides it with the other windows), draggable, position remembered. It uses a translucent look without blur (a white tint, a rim and the app mark), because real glass would need a backdrop capture for a window that sits under other windows. It has no click action. A drag entering it opens the pad over it. |
+| **Shake while dragging** | On (heuristic) | While the left button is held and the pointer is moving, **≥3 horizontal direction reversals within 500 ms, each ≥40 physical px** (about 20 logical px at 200% scale), arm the trigger. An armed shake shows the pad as an invisible *probe*. The probe becomes visible only if a `DragEnter` that carries file paths reaches it **within 300 ms**; otherwise it is hidden again. Text selection, painting, games and Aero Shake therefore don't open it (a non-OLE press-drag keeps mouse capture in its own window and never reaches the probe). The trigger is **disabled while any monitor's foreground window is fullscreen**. If no drop arrives within 1.5 s of every mouse button being released, the pad closes on its own (this release grace applies to every drag-mode pad, not only shake opens). A shake while a pad is still waiting for its drop is ignored; a shake while any other pad is open replaces it. This is a heuristic and is treated as one in the QA checklist. |
+| **"Open with Recast"** (Explorer) | On | Opens the pad at the cursor with the selection preloaded. Segments are then **clicked** rather than dropped on. Launching `recast.exe --pad <files>` does the same, and is how Explorer's verb works (§6.10). |
 | **Companion → Activity** | Always | Dropping files on the Activity view opens the same ring inside the window. |
 
 Only drags that carry **file paths** open the pad. Text, links, and virtual items with no file system path (zip-folder contents, phone storage) are ignored. Drags from apps running elevated (as administrator) can't reach Recast, because Windows' integrity levels block them; this is noted in the help text, not worked around.
@@ -98,7 +98,7 @@ running ──new trigger──► the running job continues in Activity; the pa
 ```
 
 - **Drop on the centre disc:** no-op, and the pad stays open. The same goes for a drop or click in a gap between segments: near-misses do nothing. Only a drop or click outside the ring band closes the pad. While the pointer is in the gap between two segments, the one it just left stays targeted, so the highlight doesn't flicker.
-- **Waiting state:** a pad opened mid-drag with no files yet (Plan 2's tray "Drop pad") shows the disc title "Drop files here" and six empty slots, without taking focus, until the files arrive.
+- **Waiting state:** a pad opened mid-drag with no files yet shows the disc title "Drop files here" and six empty slots, without taking focus, until the files arrive. The shake probe is the same state, but invisible until a file drag enters it (§4.1).
 - **Dismissal while dragging:** while the pad is open, the core polls `GetCursorPos` at 60 Hz, because Tauri sends no positions after `Leave`. "Leaves the pad by > 80 px for 600 ms" is measured from that poll.
 - **One pad at a time:** a trigger while the pad is open reuses it (see the last transition above).
 
@@ -106,6 +106,17 @@ running ──new trigger──► the running job continues in Activity; the pa
 - **Notifications** for jobs are suppressed whenever the companion window is visible and focused, whichever section (Activity, Library, Settings) is showing: the Activity row already says it. Engine-install failures still notify.
 - **Done:** Windows notification, "holiday.mp3 ready", with a **Show in folder** action. A batch of **3 or more** files sends **one** combined notification when the batch ends ("8 files converted · 1 failed").
 - **Failed:** notification, "Couldn't convert holiday.mov", with a **Details** action that opens Activity at that job.
+- **Buttons by outcome:**
+
+  | Outcome | Buttons |
+  |---|---|
+  | Done | Show in folder |
+  | Failed (any other cause) | Details |
+  | `DEST_UNWRITABLE` | Save to fallback folder, Details |
+  | `DEST_LOCKED` | Retry, Details |
+  | Engine install failed | Retry |
+
+  A click on the notification itself opens Activity at the job, or Library for an engine failure. Retry on an engine that a conversion is using shows an "… is in use. Try again when the conversion finishes." toast instead of failing silently. A retried install that fails again notifies again. The buttons work only while the toast is on screen, because the notification plugin reports clicks only then, not from the Action Center. Dev builds have no app identity (AUMID) for toasts, so button clicks are checked in a release install.
 - **Keyboard:** when the pad is open, ←/→ (or Tab) move around the ring over the targetable slots only, Enter runs the focused segment, and Esc closes. Paging with the keyboard moves focus to the first tool on the new page (or the first active slot if the page has none).
 
 ### 4.4 Visual spec (Liquid Glass, regular, adapting)
@@ -141,19 +152,22 @@ A 760 × 520 window opened from the tray icon (left-click) or the tray menu. Sam
 3. **Library:** one row per engine: name, version, size, licence and status (Not installed / Installing x% / Installed / Damaged). Actions: Download, Remove, Verify. A footer shows the total disk used. Future engines (LibreOffice, LaTeX) appear here as "Coming later".
    - **Third-party notices:** a view listing every engine and bundled component (including 7-Zip, §6.3) with its licence text (a Licence button expands it inline, whether or not the engine is installed; GPL-3.0, GPL-2.0, AGPL-3.0, Apache-2.0 and ImageMagick texts ship with Recast), upstream homepage and, for GPL/AGPL/LGPL items, where to get the corresponding source.
 4. **Settings:**
-   - **Triggers:** on/off for each; edge and position for the edge handle.
-   - **Defaults:** quality per format (§5).
+   - **Opening the pad** (triggers): on/off for the edge handle, the desk pad and shake; edge and position along the edge for the edge handle. A change moves, shows or hides the handle and desk pad at once and starts or stops the shake hook.
    - **Output:** next to the original, or a fixed folder.
-   - **Concurrency:** 1–4, default 2.
-   - **Stall timeout:** default 60 s.
-   - **Start with Windows:** default on.
-   - **Explorer entry:** on/off.
+   - **Quality:** per format (§5).
+   - **Jobs:** concurrency 1–4 (default 2) and the stall timeout (default 60 s).
+   - **Windows:** the Explorer entry on/off, and Start with Windows (default on).
 
-Closing the window hides it. Recast keeps running in the tray, and "Quit" in the tray menu exits. The tray menu is Open Recast, **Convert files…** (a file picker, then the pad opens at the cursor in click mode), **Drop pad** (opens the pad in drag mode with no files, to try mid-drag targeting; a stand-in that Plan 3's triggers replace) and Quit.
+   The companion serialises its settings saves (one at a time, in order), and the section shows the error when a save fails.
+
+Closing the window hides it. Recast keeps running in the tray, and "Quit" in the tray menu exits. The tray menu is **Open Recast**, **Convert files…** (a file picker, then the pad opens at the cursor in click mode) and **Quit**. There is no "Drop pad" item: the triggers of §4.1 replaced Plan 2's stand-in. The tray glyph is monochrome and follows the **taskbar** theme (light or dark), read from `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\SystemUsesLightTheme` and re-checked once a second. A start with `--autostart` (the Run value) leaves the companion hidden in the tray; a plain launch shows it.
 
 ### 4.6 First run
 
 On first launch the companion window opens once with a three-step welcome: (1) the edge handle, highlighted on screen with "Drag a file here"; (2) the tray icon and what it opens; (3) the trigger toggles, with shake explained as "shake a file mid-drag". Finishing or skipping it sets `app.first_run_done`.
+
+- **The highlight** enlarges the handle window to 180 × 80 logical px toward the screen centre, with the label drawn inside it, and `place_handle` restores it afterwards. It shows **only while the companion is visible and focused** (nobody can see the handle's label otherwise), and only on step 1. The pad that a drop on the highlighted handle opens is anchored beside the tab, not the grown window.
+- **Read-only settings:** if `settings.json` could not be read at startup (§6.6), nothing can be saved, so the welcome would return on every launch. It is then not shown at all. The companion asks `settings_read_only` before deciding.
 
 ---
 
@@ -225,13 +239,13 @@ EPUB, DOCX, HTML (`--standalone --embed-resources`, so images are inlined), Mark
 
 ### 5.6 Multiple files
 - **Same kind:** the ring shows that kind's presets, and each file becomes its own job. The multi-file presets (Merge, Combine into PDF) appear when `min_files` is met.
-- **Mixed kinds:** the ring shows only presets whose `accepts` covers **every** file. If none do, the ring has a single segment, **Open in Recast**, which opens Activity with the files listed so each group can be converted separately.
+- **Mixed kinds:** the ring shows only presets whose `accepts` covers **every** file. If none do, the pad's ring has a single segment, **Open** (the pill reads "Open in Recast · convert each kind on its own"), which calls `open_in_recast`. That shows the companion and sends it `companion://open-files`, and Activity lists the files in kind groups (video, audio, image, PDF, document, other), each with a **Choose conversion** button that opens the ring for that group. In the companion itself, a mixed drop shows the groups directly, with no ring.
 
 ### 5.7 Output naming and location
 - **Default location:** the source file's folder. Settings can switch to a fixed folder.
 - **Name:** `replace_ext` gives `holiday.mp3`. If that exists, `holiday (1).mp3`, `holiday (2).mp3`, and so on. **Nothing is ever overwritten**, and the source is never modified.
 - Same-format presets use a suffix (`holiday (compressed).mp4`). Presets that output folders use `name (pages)/`.
-- If the destination folder isn't writable (read-only, protected, some cloud folders), the job fails with `DEST_UNWRITABLE` and offers **Save to fallback folder** (default `Documents\Recast`) in the notification and in Activity.
+- If the destination folder isn't writable (read-only, protected, some cloud folders), the job fails with `DEST_UNWRITABLE` and offers **Save to fallback folder** (default `Documents\Recast`) in the notification (with **Details**) and in Activity.
 
 ---
 
@@ -326,16 +340,23 @@ JSON at `%APPDATA%\Recast\settings.json`, with a typed struct, defaults for ever
 ### 6.7 `triggers`
 - **Pad window lifecycle** (`pad.rs`): the pad's WebView2 window is **created hidden at startup** and reused, because creating one on demand takes hundreds of ms and would miss the shake gesture. Triggers call `pad::open(app, paths, PadMode::Drag | Click)`.
   - **Generations:** every open and every close bumps a generation counter, held with the page's `ready` flag and any parked open under one lock. The generation travels in `pad://open`, and `pad_show`, `pad_close` and `pad_track_cursor` from the page are ignored unless they carry the current one, so a late call from a dismissed pad can't hide or stop a newer one. An open that arrives before the page has registered its listeners (`pad_ready`) is parked and delivered then.
-  - **Placement:** the window is centred on the cursor and clamped to that monitor's work area, positioned first and then sized so the size is read at the target monitor's DPI.
+  - **Placement:** `open_at(app, paths, mode, anchor)` centres the window on the anchor (the cursor when none is given) and clamps it to that monitor's work area, positioned first and then sized so the size is read at the target monitor's DPI. `open` is `open_at` with no anchor.
   - **Click mode** positions the window but doesn't show it. The page calls `pad_show(generation)` after its first drawn frame, which shows and focuses it, so a slow `inspect` never leaves an invisible window swallowing clicks.
   - **Drag mode** shows at once with `ShowWindow(SW_SHOWNOACTIVATE)` (no focus, so the drag continues), because OLE re-checks the window under the cursor on every move and a pad shown mid-drag receives `DragEnter` for the ongoing drag. After a drop on the pad, the session becomes click mode and the pad takes focus.
   - **Hiding:** tao doesn't know about a window shown behind its back, so its own `hide()` can do nothing for a drag-mode pad. Closing therefore also calls raw `ShowWindow(SW_HIDE)` through the platform layer.
   - **Alt+F4** (a close request on the pad) is prevented: the pad receives `pad://dismiss` and hides. The window is never destroyed.
-  - **Cursor poll:** a drag-mode open starts a thread that emits `pad://cursor` (the cursor relative to the pad, in logical px) every 16 ms, stopping when the pad is hidden. A poll epoch counter retires old pollers, so a close followed by a quick reopen can't leave two running. The page ignores positions until the cursor has been inside once, so a pad opened at the edge doesn't dismiss itself.
-  - **Main thread:** all window operations and generation changes run on the main thread, in order, whichever thread asked (IPC commands, Plan 3's hook threads).
-- **Edge handle** and **desk pad** are tiny Tauri windows. They use Tauri's drag-drop events (`Enter` / `Over{position}` / `Drop{paths}` / `Leave`), and Enter opens the pad.
-- **Shake:** a `WH_MOUSE_LL` hook on a dedicated thread, implementing the detector in §4.1. The detector is a pure function over a sample stream, so it can be unit-tested. The hook does nothing while the left button is up. After arming, the confirmation step checks `GetCursorInfo` for a drag cursor or waits for a `DragEnter`, within the 300 ms window from §4.1. Fullscreen detection compares the foreground window's rect with its monitor's rect.
-- **Edge-handle auto-hide** uses the same fullscreen check, run on foreground-change events (`SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`) and once a second.
+  - **Cursor poll:** a drag-mode open starts a thread that emits `pad://cursor` (the cursor relative to the pad, in logical px) every 16 ms, stopping when the pad is hidden. A poll epoch counter retires old pollers, so a close followed by a quick reopen can't leave two running. The page ignores positions until the cursor has been inside once, so a pad opened at the edge doesn't dismiss itself. The same poller samples the mouse buttons (`GetAsyncKeyState` for left, right and middle) and, once **no button** has been down for the 1.5 s release grace while the open is still a drag-mode pad waiting for its drop, emits `pad://dismiss` and closes it. This covers every drag-mode pad, and it doesn't depend on the mouse hook. A pure `grace_due` decides it.
+  - **Mode tracking:** the pad remembers whether it is in drag mode and whether a drop has landed. Both are set from `WindowEvent::DragDrop` in Rust's `on_window_event` (`Enter` with paths confirms a probe; `Drop` marks the pad as dropped), in event order on the main thread, so no IPC round trip can arrive late. Every close that Rust starts itself (the probe timeout and the release grace) emits `pad://dismiss` to the page first.
+  - **Probe:** `open_probe` opens a drag-mode pad with `probe = true`, shown no-activate with nothing drawn and no backdrop captured, and starts a 300 ms timer. A `DragEnter` with paths for the current generation confirms it (the page then draws and captures), and the page ignores an enter without paths while probing. If nothing confirms it, the timer hides the pad.
+  - **Main thread:** all window operations and generation changes run on the main thread, in order, whichever thread asked (IPC commands, the hook's worker thread).
+- **Edge handle** and **desk pad** are tiny Tauri windows on one Vite entry (`widgets.html`), `handle` and `deskpad`. Tauri's drag-drop events reach `on_window_event`: `Enter` with paths opens a drag-mode pad at the widget's anchor (unless a pad is already open for those files) and `Drop` opens a click-mode pad. The page gets `widget://hover` (true on enter, false on leave or drop) to glow.
+  - **No caption:** `tao` leaves `WS_CAPTION` set on an undecorated window, and Windows then keeps a minimum width of about 198 px, so a 6 px handle comes out 198 px wide. Both widget windows have the caption bits stripped (`WS_CAPTION`, `WS_SYSMENU`, the minimise and maximise boxes) at startup, and the real outer size is logged on first placement.
+  - **Handle placement** is `handle_rect` on the primary monitor's work area, plus the 2 px auto-hide inset of §4.1 when the shell reports an auto-hide taskbar on that edge. The first-run highlight (§4.6) temporarily enlarges the window.
+  - **Desk pad placement:** it sits at `triggers.desk_x/desk_y` (physical px; exactly `-1, -1` means unset, which is the bottom-right of the primary work area, 24 px in). A saved spot is looked up on the monitor holding it and falls back to the primary if that monitor is gone. The window is 96 logical px square.
+  - **Saved moves:** the desk pad's `Moved` events are saved (500 ms debounced, through one thread) unless they are programmatic: a position equal to the one Recast last placed it at, or any move within 1 s of Recast placing it (Windows settling the window after a layout change). No button state is consulted, so dragging with "show window contents" off and keyboard moves are saved too.
+  - **Layout changes:** the one-second tick compares the primary work area and scale (and the desk pad's) with what the widgets were placed for, and re-places them when they differ (display, DPI, taskbar or monitor-layout changes).
+- **Shake:** a `WH_MOUSE_LL` hook on a dedicated thread, implementing the detector in §4.1. The hook callback does nothing but a `try_lock` and a channel `send`; a **worker thread** owns the receiver and runs the detector, the fullscreen check, logging and `open_probe`, so a slow step can never stall the system's mouse input. Stopping the hook posts `WM_QUIT`, joins the hook thread, ends the channel and joins the worker; each hook carries an id so a stale stop can't clear a newer hook's channel. The detector is a pure function over a sample stream, tested with synthetic streams (straight drags, jitter, slow and fast shakes, vertical and diagonal shakes, a pause between reversals); real-world false positives are in `docs/qa-checklist.md`. Fullscreen detection compares the foreground window's rect with its monitor's rect, ignores maximized windows and shell windows (§4.1), and for shake covers any monitor.
+- **Edge-handle auto-hide** uses the same fullscreen check on the primary monitor, run on foreground-change events (`SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`) and once a second.
 - **Mid-drag targeting:** while a drag is over the pad window, `Over{position}` events drive hit-testing, because ordinary mouse events don't fire during an OLE drag. `Drop` fires the targeted segment.
 
 ### 6.8 `backdrop`
@@ -360,64 +381,112 @@ Nothing outside `platform` may call OS APIs directly.
 
 ### 6.10 `shell` and single instance
 - "Open with Recast" is registered under `HKCU\Software\Classes\*\shell\Recast` (no admin rights), with command `"<exe>" --pad "%1"` and **`MultiSelectModel=Player`**. Without it, Explorer hides a command-line verb when more than 15 items are selected; with it, the limit is 100.
-- `tauri-plugin-single-instance` is registered from Plan 1: a second copy only focuses the existing window, because its crash recovery would otherwise delete the first copy's live temp dirs. Argv forwarding arrives with the shell work in Plan 3.
-- Explorer starts one process per selected file. `tauri-plugin-single-instance` forwards them to the running instance, which uses a **sliding 300 ms debounce** (reset on each new arrival, capped at **2 s** from the first) and then opens one pad with all the files.
-- **Focus:** a forwarded instance never received user input, so Windows' foreground lock would refuse the pad focus. Before forwarding, each secondary process calls **`AllowSetForegroundWindow(primary_pid)`** (a small custom hook around the single-instance plugin), so the click-mode pad can take focus for keyboard use and click-outside dismissal.
-- The entry is removed when the Explorer-entry setting is turned off, and on uninstall.
+- `tauri-plugin-single-instance` is registered from Plan 1: a second copy never starts, because its crash recovery would otherwise delete the first copy's live temp dirs. Its callback parses the second copy's argv (`--pad <paths…>`, `--autostart`; relative paths are made absolute against the second copy's working directory). `--pad` forwards the files to the pad. A plain second launch shows the companion. A second `--autostart` launch does nothing. The first launch reads its own argv the same way: `--pad` goes through the same debounce into the pad, `--autostart` keeps the companion hidden (`visible: false` in the window config; a plain launch shows it at startup).
+- Explorer starts one process per selected file. The running instance collects the forwarded paths with a **sliding 300 ms debounce** (reset on each new arrival, capped at **2 s** from the first) and then opens one click-mode pad with all the files. A flush within 2 s of the previous one adds to that pad's files (order kept, duplicates removed) instead of replacing them, so a slow Explorer selection doesn't split in two. The collector is managed on the app builder before the plugin is registered, so the callback can always find it.
+- **Focus:** a forwarded instance never received user input, so Windows' foreground lock would refuse the pad focus. `tauri-plugin-single-instance` 2.5.5 already calls `AllowSetForegroundWindow(primary_pid)` before forwarding, so no custom hook is needed and the click-mode pad can take focus for keyboard use and click-outside dismissal.
+- **Registry (HKCU, no admin):** the verb's `command` is `"<exe>" --pad "%1"`; the start-with-Windows value `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Recast` is `"<exe>" --autostart`. Both are written (or removed, following the settings) at every start, so the paths follow the exe after an update or a move, and again on every settings change, under one lock so quick changes land in order.
+- **Dev builds don't touch the registry.** The verb and the Run value are written only in release builds, or in a dev build started with `RECAST_DEV_INTEGRATION=1` (exactly `1`), so a `cargo run` never points Explorer or the Run key at `target\debug`.
+- The entry is removed when the Explorer-entry setting is turned off, and on uninstall (§6.12).
 
 ### 6.11 IPC (typed, in `src/shared/ipc.ts` mirrored in Rust)
 - **Commands:**
   - `inspect(paths)`
   - `start_jobs(preset_id, paths, options?)` (`options` is `JobOptions { ranges? }`, validated before anything is queued; a preset that takes no ranges refuses them), `cancel_job(id)`, `retry_job(id, fallback)`, `list_jobs(before_seq)` (keyset paging, 50 rows, newest first; each record carries its `seq`), `remove_job(id)`. `retry_job` with `fallback = true` re-runs into the fallback folder (§5.7)
   - `engines_list()`, `engine_install(id)`, `engine_remove(id)`, `engine_verify(id)`
-  - `get_settings()`, `set_settings(patch)`
+  - `get_settings()`, `set_settings(patch)`, `settings_read_only()` (true when `settings.json` couldn't be read at startup, §4.6)
+  - `highlight_handle(on)` (first run: enlarge and label the edge handle, §4.6) and `open_in_recast(paths)` (shows the companion and sends it `companion://open-files`, §5.6). The pad may call `open_in_recast`; the companion calls both.
   - `reveal_job(id)`, `open_job(id)`, `notices()`, `notice_text(index, name)`
-  - `thumbnail(path)` returns bytes (§6.1) and `capture_backdrop()` returns the backdrop wire format (§6.8), both as binary `tauri::ipc::Response`s. `capture_backdrop` refuses any window but the pad. Every app command is declared in `build.rs` (so it gets an `allow-<command>` permission) and granted per window: `capabilities/default.json` gives the companion its commands, `capabilities/pad.json` gives the pad only `inspect`, `start_jobs`, `thumbnail`, `capture_backdrop`, `pad_ready`, `pad_show`, `pad_close` and `pad_track_cursor`.
-  - Pad window: `pad_ready()` (the page's listeners are registered), `pad_show(generation)`, `pad_close(generation)` and `pad_track_cursor(on, generation)`. Each of the last three is a no-op if `generation` is stale (§6.7).
-  - Debug builds only: `debug_open_pad(paths, drag)` opens the pad as a trigger would, for testing. It is refused in release builds, and goes away when Plan 3's real triggers exist.
+  - `thumbnail(path)` returns bytes (§6.1) and `capture_backdrop()` returns the backdrop wire format (§6.8), both as binary `tauri::ipc::Response`s. `capture_backdrop` refuses any window but the pad. Every app command is declared in `build.rs` (so it gets an `allow-<command>` permission) and granted per window: `capabilities/default.json` gives the companion its commands, `capabilities/pad.json` gives the pad only `inspect`, `start_jobs`, `thumbnail`, `capture_backdrop`, `open_in_recast`, `pad_ready`, `pad_show`, `pad_close` and `pad_track_cursor`, and `capabilities/widgets.json` gives the `handle` and `deskpad` windows no app commands at all, only `core:event:allow-listen`, `core:event:allow-unlisten` and `core:window:allow-start-dragging` (the desk pad is dragged by the page).
+  - Pad window: `pad_ready()` (the page's listeners are registered), `pad_show(generation)`, `pad_close(generation)` and `pad_track_cursor(on, generation)`. Each of the last three is a no-op if `generation` is stale (§6.7). There is no command for a probe's drag-enter: Rust sees it as a window event (§6.7).
+  - `debug_open_pad` is gone: the real triggers replaced it. To open the pad from a terminal, run `recast.exe --pad <files>` (§6.10).
   - There are deliberately no generic `reveal(path)` or `open(path)` commands, because the webview could pass them any path. `reveal_job` and `open_job` look up the history row and require status `done` and an existing output. `notice_text(index, name)` returns the licence text of a notice (by its index in `notices()`, and fails with "The list changed; reopen Library." if the notice at that index no longer has that name): the installed engine's own licence file (plain text, capped at 512 KB) when present, otherwise the text bundled at `<resource dir>/licenses/` (source: `src-tauri/licenses/`).
   - Commands are `async` and run their blocking work off the main thread. Rust and TS mirror each other (`src/shared/ipc.ts`: `ipc.revealJob`, `ipc.openJob`, `ipc.noticeText`).
-- **Events:** `job://*`, `engine://progress|done|failed`, and to the pad window `pad://open{paths, mode, reduced_transparency, generation}` (`mode` is `click` or `drag`), `pad://cursor{x, y}` (logical px relative to the pad, drag mode only) and `pad://dismiss` (the window was asked to close).
+- **Events:** `job://*`, `engine://progress|done|failed`, and to the pad window `pad://open{paths, mode, reduced_transparency, generation, probe, armed}` (`mode` is `click` or `drag`; `probe` marks the invisible shake probe; `armed` marks an open from an anchored trigger or the shake, for the page's own release logic), `pad://cursor{x, y}` (logical px relative to the pad, drag mode only) and `pad://dismiss` (the window was asked to close, or Rust closed it: the probe timeout and the release grace).
+  - To the companion: `companion://navigate{section, job_id}` (a notification button or click: Activity, optionally expanding one job, or Library) and `companion://open-files{paths}` (from `open_in_recast`).
+  - To the `handle` and `deskpad` windows: `widget://hover` (a boolean) and, to the handle only, `widget://highlight{on, edge}` (first run).
 
 ### 6.12 Installer and uninstall
 - Tauri NSIS bundle, **per-user** install with no admin rights. **WebView2 install mode: `downloadBootstrapper`**, so the installer stays small and fetches WebView2 only on the rare Windows 10 machine without it.
 - `7z.exe` and `7z.dll` ship inside the app (§6.3).
-- **`installerHooks` → `NSIS_HOOK_POSTUNINSTALL`** removes everything Recast created outside its install folder: the HKCU `*\shell\Recast` verb, the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` start-with-Windows value, and `%LOCALAPPDATA%\Recast` (engines, history, logs). `%APPDATA%\Recast` (settings) is removed only if the user ticks "Delete app data". Recast's data paths are fixed to these `Recast` folders, not Tauri's identifier-named folders, so the hook and the app agree.
+- **`installerHooks` → `NSIS_HOOK_POSTUNINSTALL`** (`src-tauri/windows/hooks.nsh`, referenced from `bundle.windows.nsis.installerHooks`) removes what Recast created outside its install folder. Unless the uninstaller runs in update mode (`/UPDATE`, `$UpdateMode = 1`), it always removes:
+  - the HKCU `Software\Classes\*\shell\Recast` verb
+  - the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value `Recast` (start with Windows)
+  - `%LOCALAPPDATA%\Recast\logs` and `%LOCALAPPDATA%\Recast\tmp`
+
+  **Only when the user ticks "Delete app data"** (`$DeleteAppDataCheckboxState = 1`) does it also remove `%LOCALAPPDATA%\Recast` (engines, history) and `%APPDATA%\Recast` (settings). The hook calls `SetShellVarContext current` first, so the folders are the current user's. Recast's data paths are fixed to these `Recast` folders, not Tauri's identifier-named folders (which Tauri's own template removes for "Delete app data"), so the hook and the app agree.
+- **Deviation from the first draft of this section:** the draft removed `%LOCALAPPDATA%\Recast` on every uninstall. Tauri's reinstall page runs the old uninstaller **without** `/UPDATE` when a user installs a newer version over an old one, so update mode can't protect the data, and an upgrade would have deleted every downloaded engine (about 250 MB) and the history. Engines and history are therefore kept unless "Delete app data" is ticked. The cost is that a plain uninstall leaves `%LOCALAPPDATA%\Recast` (engines, `recast.db`) behind; the owner should confirm this policy (handoff, "Owner decisions").
 
 ### 6.13 Repo layout
-This is the layout as built by Plans 1 and 2. The handle, desk pad, triggers and shell modules arrive with Plan 3.
+This is the layout as built by Plans 1 to 3.
 ```
 recast/
-  index.html  pad.html  package.json  vite.config.ts  tsconfig.json   # two Vite entries
+  index.html  pad.html  widgets.html  package.json  vite.config.ts  tsconfig.json   # three Vite entries
   src/                       # React + TS
     main.tsx
-    companion/               # App, Activity, InlineRing, Tools, SortableList, Library, Settings,
-                             # dragRouter.ts (one drag listener), toolList.ts, jobs.ts (+ companion.css)
+    companion/               # App, Activity, InlineRing, Tools, SortableList, Library, Settings, Welcome,
+                             # dragRouter.ts (one drag listener), toolList.ts, jobs.ts, groups.ts (kind groups, §5.6),
+                             # saveQueue.ts (serialised settings saves), welcomeState.ts, ringStarted.ts (+ companion.css)
     pad/                     # the pad window and the ring (shared with the companion's InlineRing):
                              # main.tsx, PadApp.tsx, Ring.tsx, usePad.ts; pure logic with tests: geometry,
                              # hitTest, paging, states (§4.3), progress, luminance, frame, anim, cursor,
-                             # disc, pill; icons.ts; glass/backdrop.ts + glass/renderer.ts (canvas); CSS
+                             # disc, pill, enter.ts (drag-enter decisions), openInRecast.ts (the mixed-kinds
+                             # segment); icons.ts; glass/backdrop.ts + glass/renderer.ts (canvas); CSS
+    widgets/                 # the handle and desk-pad page: main.tsx, Widget.tsx, widgets.css
     shared/                  # ipc.ts, types.ts, format.ts, pageRanges.ts (mirrors Rust), useThumb.ts
   src-tauri/
     src/
       lib.rs  main.rs  app_state.rs  ipc.rs  tray.rs  logging.rs  paths.rs
       detect.rs  pad_model.rs  history.rs  settings.rs  proc.rs
       pad.rs  backdrop.rs  thumbs.rs   # pad window controller, capture wire format, thumbnails
+      shell.rs  integration.rs  toast.rs   # argv, registry entries and forwarding debounce; applying settings
+                                           # to the registry and triggers; notification targets and actions
       fsutil.rs  lockutil.rs  testutil.rs
+      triggers/   mod.rs  shake.rs  geometry.rs   # handle/desk windows and wiring; detector; placement and fullscreen predicate
       presets/    mod.rs  available.rs  command.rs  naming.rs  ranges.rs  catalog_tests.rs  snapshots/
       engines/    mod.rs  manifest.rs  install.rs  caps.rs
       jobs/       mod.rs  runner.rs  progress.rs  notify.rs  explain.rs  math.rs
-      platform/   mod.rs  win.rs
+      platform/   mod.rs  win.rs   # also: HKCU registry, the mouse hook, the foreground watcher, the taskbar theme
     presets/presets.toml
     engines/engines.toml         # generated by scripts/refresh-engines.mjs
     bin/7z.exe  7z.dll  7zip-License.txt
+    icons/tray-dark-taskbar.png  tray-light-taskbar.png   # tray glyphs, embedded with include_image!
+    windows/hooks.nsh            # NSIS_HOOK_POSTUNINSTALL (§6.12)
     examples/fake_engine.rs      # test engine for the watchdog, kill and runner tests
     tests/engines_integration.rs # real-engine tests (feature `engines`)
-    capabilities/default.json  pad.json  tauri.conf.json   # commands are scoped per window: pad.json grants the pad only inspect, start_jobs, thumbnail, capture_backdrop and the pad_* commands
+    capabilities/default.json  pad.json  widgets.json  tauri.conf.json   # commands are scoped per window (§6.11)
   scripts/refresh-engines.mjs  fetch-7zip.mjs
-  docs/
+  docs/  qa-checklist.md  superpowers/{specs,plans,handoff-plan-4.md}
 ```
-Still to come: `src-tauri/windows/hooks.nsh` (`NSIS_HOOK_POSTUNINSTALL`, section 6.12), `docs/qa-checklist.md`, and the handle and desk-pad front ends. The Windows implementation is `platform/win.rs`, because a module named `windows` would shadow the `windows` crate.
+The Windows implementation is `platform/win.rs`, because a module named `windows` would shadow the `windows` crate.
+
+### 6.14 Where Plan 3 differs from the first draft of this spec
+
+The sections above already describe what was built. This list records the deliberate differences from the original wording, so the reasoning isn't lost.
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | Shake is confirmed by a `DragEnter` with file paths alone, not "a drag cursor or a `DragEnter`". The armed pad is an invisible probe (§6.7) | OLE drag cursors come from the drag source and can't be told apart reliably through `GetCursorInfo` |
+| 2 | `AllowSetForegroundWindow` needs no custom hook | `tauri-plugin-single-instance` 2.5.5 already calls it before forwarding |
+| 3 | The handle's pad sits beside the handle (12 px away), not on the cursor. The handle lives on the primary monitor | The handle stays reachable for a drop |
+| 4 | The desk pad has a translucent look without blur and no click action | Glass would need a backdrop capture for a window under other windows |
+| 5 | Fullscreen auto-hide looks at the primary monitor; shake is off while any monitor has a fullscreen foreground window; maximized and shell windows never count | The handle lives on the primary monitor; a maximized window is not a video or game |
+| 6 | Dev builds don't write the Explorer verb or the Run value unless `RECAST_DEV_INTEGRATION=1` | A `cargo run` must not point Explorer at `target\debug` |
+| 7 | An `--autostart` launch stays in the tray (the companion is created hidden) | Start with Windows shouldn't open a window at sign-in |
+| 8 | Notification buttons work only while the toast is on screen; a click on the body opens Activity (or Library for an engine failure) | The plugin reports clicks only then |
+| 9 | Mixed kinds: the pad shows one segment, Open; the companion shows the groups directly (§5.6) | A mixed drop has no single conversion to offer |
+| 10 | The desk pad position is `triggers.desk_x/desk_y`, physical px, `-1, -1` = unset | Settings are flat numbers; unset needs a sentinel |
+| 11 | The shake detector is tested with synthetic streams; real-world false positives are in the QA checklist | No recorded streams exist yet |
+| 12 | Uninstall removes engines and history only with "Delete app data" (§6.12) | Tauri's reinstall page runs the old uninstaller without `/UPDATE`, so an upgrade would wipe them |
+| 13 | The shake stroke minimum (40) is measured in physical px, about 20 logical px at 200% | A single threshold keeps the detector pure; scaling it is not planned |
+| 14 | The 1.5 s release grace applies to every drag-mode pad, and a release means no mouse button (left, right or middle) is down | A grace that depended on the shake hook would miss handle and desk-pad opens, and swapped or other buttons |
+
+Smaller decisions made while building:
+- The handle and desk-pad windows have `WS_CAPTION` stripped (§6.7); `tao` otherwise forces a width of about 198 px.
+- The desk pad is 96 logical px square, and its window size is logged on first placement along with the handle's.
+- The probe's confirmation and the drop marker are recorded in Rust from window events, not over IPC (§6.7), so a late IPC call can't race a close.
+- The mouse hook callback only queues events; a worker thread does the work (§6.7).
+- Settings saves from the companion are serialised, and the welcome never shows when settings are read-only (§4.6).
+- Retrying a failed engine install clears that engine's "already notified" mark, so a second failure notifies again (§4.3).
 
 ---
 
@@ -426,12 +495,12 @@ Still to come: `src-tauri/windows/hooks.nsh` (`NSIS_HOOK_POSTUNINSTALL`, section
 | Situation | Behaviour |
 |---|---|
 | **Engine not installed** | The segment shows a download badge. Dropping on it queues the job as *Waiting for engine*, installs the engine (pad ring: "Getting FFmpeg · 84 MB"), then runs the job. If the install fails, the job fails with `ENGINE_INSTALL_FAILED`. |
-| **Download or checksum failure** | A checksum mismatch deletes the download; a network failure keeps the partial file so the next attempt resumes. Nothing is executed. The job fails with `ENGINE_INSTALL_FAILED` and a notification is shown; Library shows the error. (The Retry button arrives with Plan 3.) |
+| **Download or checksum failure** | A checksum mismatch deletes the download; a network failure keeps the partial file so the next attempt resumes. Nothing is executed. The job fails with `ENGINE_INSTALL_FAILED` and a notification is shown; Library shows the error. The notification has a **Retry** button that runs the install again; if a conversion is using that engine, Retry shows an "in use" toast instead (§4.3). |
 | **Engine exits non-zero** | `ENGINE_FAILED`. A plain-language reason is mapped from known stderr patterns (unsupported codec, corrupt input, encrypted PDF, …) and falls back to "The converter reported an error". The stderr tail is in Details. |
 | **Stalled** | `STALLED`: killed by the watchdog and the temp file deleted. Details suggest Retry. |
 | **Source missing, locked or unreadable** | `SOURCE_UNREADABLE`, checked before spawning. |
 | **Destination not writable** | `DEST_UNWRITABLE`, checked before spawning by creating and deleting a probe file. The notification and Activity offer **Save to fallback folder** (§5.7). |
-| **Output locked at rename** | Retried with backoff for up to 5 s (§6.4), then `DEST_LOCKED`, with Retry. |
+| **Output locked at rename** | Retried with backoff for up to 5 s (§6.4), then `DEST_LOCKED`. The notification offers **Retry** and **Details**. |
 | **Low disk space** | `DISK_FULL` before spawning, if free space < max(estimate × 1.2, 50 MB). Estimates: same-kind conversion ≈ source size; WAV ≈ duration × 176 kB/s; Shrink = target; PDF to images ≈ pages × 1 MB. An out-of-space failure during the run maps to the same code. |
 | **Shrink target impossible** | `TARGET_TOO_SMALL`, before spawning, with the minimum achievable size in the message. |
 | **Already small enough** | Shrink on a source ≤ target, or Compress whose output isn't smaller: `ALREADY_SMALL`, shown as a success-style notice. No new file is written. |
@@ -458,12 +527,12 @@ Logs go to `%LOCALAPPDATA%\Recast\logs\recast.log` (rotating, 5 × 1 MB). Logs a
 
 | Layer | What | How |
 |---|---|---|
-| Rust unit | `presets::build_command` for every preset (snapshot tests of argv); `available()` rules for single, multiple and mixed files; output naming and collisions; ffmpeg progress parser; Ghostscript page parser; shake detector over recorded sample streams; settings defaults and migration; manifest validation | `cargo test`, no engines needed |
+| Rust unit | `presets::build_command` for every preset (snapshot tests of argv); `available()` rules for single, multiple and mixed files; output naming and collisions; ffmpeg progress parser; Ghostscript page parser; shake detector over synthetic sample streams (straight drags, jitter, slow and fast shakes, vertical and diagonal shakes); trigger geometry and the fullscreen predicate; argv parsing and the forwarding debounce; notification targets and actions; settings defaults and migration; manifest validation | `cargo test`, no engines needed |
 | Rust watchdog / kill | a fake engine (test binary) that prints progress then hangs, ignores signals, or spawns a child; assert Stalled, the whole tree killed and the temp file gone | `cargo test` |
 | Rust integration | tiny fixtures (2 s video, 10-bit HEVC iPhone clip, video with no audio, short audio, PNG with alpha, animated GIF, HEIC, 3-page PDF, EPUB, MD with an image, TXT) through **every preset** with the real engines (downloaded once, cached in CI). Filenames include **Unicode** (`café 日本.mov`), a **path over 260 characters**, and **`%`, `[ ]` and a leading `-`**. Assert the output exists and has the right type (`ffprobe` / `magick identify` / `qpdf --check`), alpha is kept where expected, MP4 is 8-bit `yuv420p`, Shrink is ≤ the target, two concurrent Shrink jobs don't collide, and no temp dir is left behind | `cargo test --features engines` |
 | Engines | install from the manifest, a corrupted download is rejected, an interrupted install leaves nothing, Verify detects tampering, Ghostscript unpacks via 7-Zip without running its installer and `gswin64c` works from the unpacked folder, the `magick -list format` capability check | `cargo test --features engines` |
 | Front end | `rsector` geometry; hit-testing (point → segment, including gaps, More and Back); ring paging; light-adaptation threshold; state machine transitions (§4.3) | Vitest |
-| Manual checklist | real Explorer drags onto the edge handle, desk pad and shake; shake false positives (text selection, painting, a fullscreen game); "Open with Recast" with 1, 20 and 100 files, and the pad taking keyboard focus; the edge handle hiding over a fullscreen video; 100%/150%/200% DPI; two monitors; reduced motion and reduced transparency; keyboard-only pad (including paging with More/Back); dark and light wallpapers, checking that segments over light areas flip to dark symbols; the pad absent from its own backdrop (no ghost ring in the glass); `?perf` frame time (open `pad.html?perf`, read `[pad] mean draw … ms` in the console while hovering; budget ≤ 4 ms, also on integrated graphics); a real Explorer drag onto the pad, targeting and dropping on a segment; Tools reordering by mouse and by keyboard, then Merge and Split with valid and invalid ranges; tray **Convert files…** and **Drop pad**; uninstall leaves no verb, Run value or `%LOCALAPPDATA%\Recast`; first-run welcome; a drag from an elevated app is ignored without errors | `docs/qa-checklist.md`, run before each release |
+| Manual checklist | real Explorer drags onto the edge handle, desk pad and shake; shake false positives (text selection, painting, a fullscreen game); "Open with Recast" with 1, 20 and 100 files, and the pad taking keyboard focus; the edge handle hiding over a fullscreen video; 100%/150%/200% DPI; two monitors; reduced motion and reduced transparency; keyboard-only pad (including paging with More/Back); dark and light wallpapers, checking that segments over light areas flip to dark symbols; the pad absent from its own backdrop (no ghost ring in the glass); `?perf` frame time (open `pad.html?perf`, read `[pad] mean draw … ms` in the console while hovering; budget ≤ 4 ms, also on integrated graphics); a real Explorer drag onto the pad, targeting and dropping on a segment; Tools reordering by mouse and by keyboard, then Merge and Split with valid and invalid ranges; tray **Convert files…**; the pad's Open segment and the Activity groups for mixed kinds; notification buttons in a release install; Win+D with the desk pad; an auto-hide taskbar, a moved taskbar and a display, DPI or monitor-layout change; a manual upgrade over an older install keeps engines and history; uninstall leaves no verb or Run value, and no `%LOCALAPPDATA%\Recast` or `%APPDATA%\Recast` when "Delete app data" is ticked; first-run welcome; the shake probe on real hardware (log line `pad: drag entered`, the pad becomes visible); a drag from an elevated app is ignored without errors | `docs/qa-checklist.md`, run before each release |
 
 ---
 
@@ -474,6 +543,8 @@ Logs go to `%LOCALAPPDATA%\Recast\logs\recast.log` (rotating, 5 × 1 MB). Logs a
 | triggers.edge_handle | on (left edge, 50%, auto-hides over fullscreen) |
 | triggers.desk_pad | off |
 | triggers.shake | on (heuristic; off while a fullscreen app is in front) |
+| triggers.edge / triggers.edge_pos | left / 0.5 (fraction of the edge) |
+| triggers.desk_x / triggers.desk_y | -1 / -1 (physical px; -1, -1 = not set: bottom-right of the primary work area) |
 | shell.explorer_entry | on |
 | output.location | next to original |
 | quality.mp3_kbps / aac_kbps | 192 / 192 |
