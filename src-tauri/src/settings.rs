@@ -27,6 +27,9 @@ pub struct Triggers {
     pub edge_pos: f64,
     pub desk_pad: bool,
     pub shake: bool,
+    /// Desk pad top-left, physical px; -1 = not placed yet (bottom-right of the work area).
+    pub desk_x: f64,
+    pub desk_y: f64,
 }
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Shell {
@@ -80,6 +83,8 @@ impl Default for Settings {
                 edge_pos: 0.5,
                 desk_pad: false,
                 shake: true,
+                desk_x: -1.0,
+                desk_y: -1.0,
             },
             shell: Shell {
                 explorer_entry: true,
@@ -395,6 +400,18 @@ fn flatten(prefix: &str, v: &Value, m: &mut BTreeMap<String, String>) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn desk_position_defaults_to_unset_and_keeps_any_value() {
+        let s = Settings::default();
+        assert_eq!((s.triggers.desk_x, s.triggers.desk_y), (-1.0, -1.0));
+        let l = from_value(json!({ "triggers": { "desk_x": -1200.0, "desk_y": 40.0 } }));
+        assert_eq!(
+            (l.settings.triggers.desk_x, l.settings.triggers.desk_y),
+            (-1200.0, 40.0)
+        );
+        assert!(l.warnings.is_empty(), "{:?}", l.warnings);
+    }
 
     #[test]
     fn defaults_match_spec_section_10() {

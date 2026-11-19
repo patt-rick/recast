@@ -14,7 +14,7 @@ use crate::jobs::notify::{Notifier, unless_watching};
 use crate::jobs::{Events, JobEvent};
 use crate::lockutil::lock;
 use crate::pad_model::{self, PadModel};
-use crate::settings::{self, Settings};
+use crate::settings::Settings;
 
 /// Sends job events to every webview and raises notifications.
 pub struct TauriEvents {
@@ -328,29 +328,12 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
 }
 
 #[tauri::command]
-pub async fn set_settings(
-    state: State<'_, AppState>,
-    patch: serde_json::Value,
-) -> Result<Settings, String> {
-    let (settings, jobs, file) = (
-        state.settings.clone(),
-        state.jobs.clone(),
-        state.paths.settings(),
-    );
-    blocking(move || {
-        let mut current = lock(&settings);
-        let next = settings::apply_patch(&current, patch);
-        for w in &next.warnings {
-            log::warn!("settings: {w}");
-        }
-        settings::save(&file, &next).map_err(|e| e.to_string())?;
-        *current = next;
-        let out = current.settings.clone();
-        drop(current); // pump reads settings through the same mutex
-        jobs.pump(); // a higher concurrency starts queued jobs now
-        Ok(out)
-    })
-    .await
+pub async fn set_settings(app: AppHandle, patch: serde_json::Value) -> Result<Settings, String> {
+    let handle = app.clone();
+    let (before, after) =
+        blocking(move || handle.state::<AppState>().update_settings(patch)).await?;
+    crate::integration::settings_changed(&app, &before, &after);
+    Ok(after)
 }
 
 /// The saved output of a job: only a done job whose file still exists qualifies.

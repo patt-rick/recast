@@ -1,7 +1,12 @@
 //! "Open with Recast" (spec §6.10) and start with Windows: the registry entries, the
 //! command line, and the debounce that turns one-process-per-file into one pad.
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+use tauri::{AppHandle, Manager};
+
+use crate::lockutil::lock;
 
 pub const VERB_KEY: &str = r"Software\Classes\*\shell\Recast";
 pub const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -135,6 +140,66 @@ pub fn merge_recent(
         }
     }
     out
+}
+
+#[derive(Default)]
+struct ForwardState {
+    collector: Collector,
+    /// A flush thread is waiting for the deadline.
+    waiting: bool,
+    /// The previous flush, for `merge_recent` (B7).
+    last: Option<(Vec<String>, Instant)>,
+}
+
+/// Paths forwarded by later processes, waiting for the debounce. Managed on the Builder
+/// before the single-instance plugin, so the callback can always find it (B6).
+#[derive(Default)]
+pub struct Forwarder {
+    inner: Mutex<ForwardState>,
+}
+
+/// Queue `paths` for one click-mode pad, opened once the arrivals stop (§6.10).
+pub fn forward(app: &AppHandle, paths: Vec<String>) {
+    let st = app.state::<Forwarder>();
+    let mut g = lock(&st.inner);
+    g.collector.push(paths, Instant::now());
+    if g.waiting {
+        return; // the waiting thread will see the new deadline
+    }
+    g.waiting = true;
+    drop(g);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        loop {
+            let st = app.state::<Forwarder>();
+            let mut g = lock(&st.inner);
+            let now = Instant::now();
+            match g.collector.deadline() {
+                None => {
+                    g.waiting = false;
+                    return;
+                }
+                Some(d) if d > now => {
+                    drop(g);
+                    std::thread::sleep(d - now);
+                }
+                Some(_) => {
+                    let fresh = g.collector.take_if_due(now).unwrap_or_default();
+                    let prev = g.last.as_ref().map(|(p, t)| (p.as_slice(), *t));
+                    let paths = merge_recent(prev, fresh, now);
+                    g.last = Some((paths.clone(), now));
+                    g.waiting = false;
+                    drop(g);
+                    log::info!(
+                        "shell: opening the pad with {} forwarded files",
+                        paths.len()
+                    );
+                    crate::pad::open(&app, paths, crate::pad::PadMode::Click);
+                    return;
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]

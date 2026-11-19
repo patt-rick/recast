@@ -4,6 +4,7 @@ pub mod detect;
 pub mod engines;
 pub mod fsutil;
 pub mod history;
+pub mod integration;
 pub mod ipc;
 pub mod jobs;
 pub mod lockutil;
@@ -27,11 +28,21 @@ use tauri::{Emitter, Manager};
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // Must be first. A second copy would mark this copy's running jobs INTERRUPTED
-        // and delete their temp dirs; instead it just focuses the running instance.
-        // (Plan 3 extends this to forward Explorer selections.)
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            tray::show_companion(app)
+        // Managed before the plugin so its callback always finds it (B6).
+        .manage(shell::Forwarder::default())
+        // Must be the first plugin. A second copy would mark this copy's running jobs
+        // INTERRUPTED and delete their temp dirs; instead it forwards its arguments here.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            let launch = shell::parse_args(&argv, std::path::Path::new(&cwd));
+            if launch.autostart {
+                // A second --autostart (e.g. a repeated sign-in) must not pop the window (L4).
+                return;
+            }
+            if launch.pad.is_empty() {
+                tray::show_companion(app)
+            } else {
+                shell::forward(app, launch.pad)
+            }
         }))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
@@ -40,6 +51,17 @@ pub fn run() {
             app_state::setup(app)?;
             pad::init(app.handle());
             tray::build(app)?;
+            integration::sync_registry(app.handle());
+            let argv: Vec<String> = std::env::args_os()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let launch = shell::parse_args(&argv, &cwd);
+            if !launch.pad.is_empty() {
+                shell::forward(app.handle(), launch.pad);
+            } else if !launch.autostart {
+                tray::show_companion(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

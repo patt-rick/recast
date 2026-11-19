@@ -137,6 +137,32 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+impl AppState {
+    /// Apply a JSON patch, save it, and return (before, after). The job queue is pumped
+    /// so a higher concurrency starts queued jobs at once.
+    pub fn update_settings(
+        &self,
+        patch: serde_json::Value,
+    ) -> Result<(settings::Settings, settings::Settings), String> {
+        let mut current = lock(&self.settings);
+        let before = current.settings.clone();
+        let next = settings::apply_patch(&current, patch);
+        for w in &next.warnings {
+            log::warn!("settings: {w}");
+        }
+        settings::save(&self.paths.settings(), &next).map_err(|e| e.to_string())?;
+        *current = next;
+        let after = current.settings.clone();
+        drop(current); // pump reads settings through the same mutex
+        self.jobs.pump();
+        Ok((before, after))
+    }
+
+    pub fn settings_now(&self) -> settings::Settings {
+        lock(&self.settings).settings.clone()
+    }
+}
+
 /// Decides which engine failures deserve a notification: never the "busy" refusal,
 /// and at most one per engine per minute.
 #[derive(Default)]

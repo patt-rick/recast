@@ -106,7 +106,7 @@ export interface Notice {
 
 export interface Settings {
   version: number;
-  triggers: { edge_handle: boolean; edge: "left" | "right" | "top" | "bottom"; edge_pos: number; desk_pad: boolean; shake: boolean };
+  triggers: { edge_handle: boolean; edge: "left" | "right" | "top" | "bottom"; edge_pos: number; desk_pad: boolean; shake: boolean; desk_x: number; desk_y: number };
   shell: { explorer_entry: boolean };
   output: { location: "next_to_original" | "folder"; folder: string; fallback_folder: string };
   quality: { mp3_kbps: number; aac_kbps: number; jpg_q: number; webp_q: number; avif_q: number };
