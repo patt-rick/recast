@@ -4,13 +4,16 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::process::Child;
+use std::sync::{Mutex, OnceLock, PoisonError, mpsc};
 
 use windows::Win32::Foundation::{
-    CloseHandle, ERROR_FILE_NOT_FOUND, HANDLE, HWND, STILL_ACTIVE, WAIT_OBJECT_0, WIN32_ERROR,
+    CloseHandle, ERROR_FILE_NOT_FOUND, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, RECT,
+    STILL_ACTIVE, WAIT_OBJECT_0, WIN32_ERROR, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
-    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, GetMonitorInfoW,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, ReleaseDC, SRCCOPY, SelectObject,
 };
 use windows::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES, GetDiskFreeSpaceExW, GetFileAttributesW,
@@ -24,18 +27,25 @@ use windows::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject,
 };
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegDeleteTreeW,
     RegGetValueW, RegSetKeyValueW,
 };
 use windows::Win32::System::Threading::{
-    GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
+    GetCurrentThreadId, GetExitCodeProcess, OpenProcess, OpenThread,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME,
+    WaitForSingleObject,
 };
+use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, SM_SWAPBUTTON, SW_HIDE, SW_SHOWNOACTIVATE, SetWindowDisplayAffinity,
-    ShowWindow, WDA_EXCLUDEFROMCAPTURE,
+    CallNextHookEx, EVENT_SYSTEM_FOREGROUND, GetClassNameW, GetDesktopWindow, GetForegroundWindow,
+    GetMessageW, GetShellWindow, GetSystemMetrics, GetWindowRect, IsZoomed, MONITORINFOF_PRIMARY,
+    MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SM_SWAPBUTTON, SW_HIDE,
+    SW_SHOWNOACTIVATE, SetTimer, SetWindowDisplayAffinity, SetWindowsHookExW, ShowWindow,
+    UnhookWindowsHookEx, WDA_EXCLUDEFROMCAPTURE, WH_MOUSE_LL, WINEVENT_OUTOFCONTEXT,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_QUIT, WM_TIMER,
 };
 use windows::core::PCWSTR;
 
@@ -423,6 +433,224 @@ pub fn left_button_down() -> bool {
     }
 }
 
+/// The foreground window and its monitor, as left, top, right, bottom.
+#[derive(Debug, Clone)]
+pub struct ForegroundInfo {
+    pub window: [i32; 4],
+    pub monitor: [i32; 4],
+    pub primary: bool,
+    pub class: String,
+    /// The window is maximized (B8): not the same as fullscreen.
+    pub zoomed: bool,
+}
+
+pub fn foreground_info() -> Option<ForegroundInfo> {
+    unsafe {
+        let h = GetForegroundWindow();
+        if h.is_invalid() || h == GetDesktopWindow() || h == GetShellWindow() {
+            return None;
+        }
+        let mut r = RECT::default();
+        GetWindowRect(h, &mut r).ok()?;
+        let m = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(m, &mut mi).as_bool() {
+            return None;
+        }
+        let mut buf = [0u16; 128];
+        let n = GetClassNameW(h, &mut buf).max(0) as usize;
+        let mr = mi.rcMonitor;
+        Some(ForegroundInfo {
+            window: [r.left, r.top, r.right, r.bottom],
+            monitor: [mr.left, mr.top, mr.right, mr.bottom],
+            primary: mi.dwFlags & MONITORINFOF_PRIMARY != 0,
+            class: String::from_utf16_lossy(&buf[..n]),
+            zoomed: IsZoomed(h).as_bool(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseInput {
+    LeftDown,
+    LeftUp,
+    Move,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MouseEvent {
+    /// GetTickCount-style milliseconds.
+    pub t_ms: u32,
+    pub x: i32,
+    pub y: i32,
+    pub input: MouseInput,
+}
+
+type MouseSink = Box<dyn FnMut(MouseEvent) + Send>;
+/// The hook callback's only way out: a channel to the worker (B5).
+static MOUSE_TX: Mutex<Option<mpsc::Sender<MouseEvent>>> = Mutex::new(None);
+
+unsafe extern "system" fn ll_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let input = match wparam.0 as u32 {
+            WM_MOUSEMOVE => Some(MouseInput::Move),
+            WM_LBUTTONDOWN => Some(MouseInput::LeftDown),
+            WM_LBUTTONUP => Some(MouseInput::LeftUp),
+            _ => None,
+        };
+        // Never block the system's mouse: try_lock and an unbounded send, nothing else.
+        if let Some(input) = input
+            && let Ok(tx) = MOUSE_TX.try_lock()
+            && let Some(tx) = tx.as_ref()
+        {
+            let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+            let _ = tx.send(MouseEvent {
+                t_ms: info.time,
+                x: info.pt.x,
+                y: info.pt.y,
+                input,
+            });
+        }
+    }
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// A global low-level mouse hook (spec §6.7). The hook thread only forwards events over
+/// a channel; a worker thread runs the sink (B5). Dropping it unhooks and joins both.
+/// One at a time: starting a second replaces the first's channel.
+pub struct MouseHook {
+    thread_id: u32,
+    hook_thread: Option<std::thread::JoinHandle<()>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl MouseHook {
+    pub fn start(mut sink: MouseSink) -> io::Result<MouseHook> {
+        let (ready_tx, ready_rx) = mpsc::channel::<Result<u32, String>>();
+        let hook_thread = std::thread::Builder::new()
+            .name("recast-mouse-hook".into())
+            .spawn(move || unsafe {
+                let mut msg = MSG::default();
+                // Create this thread's message queue before anyone posts WM_QUIT to it.
+                let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+                let module = GetModuleHandleW(None).ok().map(|m| HINSTANCE(m.0));
+                let hook = match SetWindowsHookExW(WH_MOUSE_LL, Some(ll_mouse), module, 0) {
+                    Ok(h) => h,
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e.to_string()));
+                        return;
+                    }
+                };
+                let _ = ready_tx.send(Ok(GetCurrentThreadId()));
+                while GetMessageW(&mut msg, None, 0, 0).0 > 0 {}
+                let _ = UnhookWindowsHookEx(hook);
+            })?;
+        let thread_id = match ready_rx.recv() {
+            Ok(Ok(id)) => id,
+            Ok(Err(e)) => {
+                let _ = hook_thread.join();
+                return Err(io::Error::other(e));
+            }
+            Err(_) => return Err(io::Error::other("the mouse hook thread exited")),
+        };
+        let (tx, rx) = mpsc::channel::<MouseEvent>();
+        let worker = std::thread::Builder::new()
+            .name("recast-mouse-worker".into())
+            .spawn(move || {
+                while let Ok(e) = rx.recv() {
+                    sink(e);
+                }
+            });
+        let worker = match worker {
+            Ok(w) => w,
+            Err(e) => {
+                post_quit(thread_id);
+                let _ = hook_thread.join();
+                return Err(e);
+            }
+        };
+        *MOUSE_TX.lock().unwrap_or_else(PoisonError::into_inner) = Some(tx);
+        Ok(MouseHook {
+            thread_id,
+            hook_thread: Some(hook_thread),
+            worker: Some(worker),
+        })
+    }
+}
+
+fn post_quit(thread_id: u32) {
+    unsafe {
+        let _ = PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
+    }
+}
+
+impl Drop for MouseHook {
+    fn drop(&mut self) {
+        post_quit(self.thread_id);
+        if let Some(j) = self.hook_thread.take() {
+            let _ = j.join();
+        }
+        // Unhooked: no more sends. Dropping the sender ends the worker's loop.
+        *MOUSE_TX.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        if let Some(j) = self.worker.take() {
+            let _ = j.join();
+        }
+    }
+}
+
+static FOREGROUND_SINK: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
+
+unsafe extern "system" fn on_foreground(
+    _: HWINEVENTHOOK,
+    _: u32,
+    _: HWND,
+    _: i32,
+    _: i32,
+    _: u32,
+    _: u32,
+) {
+    if let Some(f) = FOREGROUND_SINK.get() {
+        f();
+    }
+}
+
+/// Call `f` whenever the foreground window changes and once a second (spec §6.7), on a
+/// dedicated thread, for the life of the process. Only the first call starts anything.
+pub fn watch_foreground(f: Box<dyn Fn() + Send + Sync>) -> io::Result<()> {
+    if FOREGROUND_SINK.set(f).is_err() {
+        return Err(io::Error::other(
+            "the foreground watcher is already running",
+        ));
+    }
+    std::thread::Builder::new()
+        .name("recast-foreground".into())
+        .spawn(|| unsafe {
+            let hook = SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                None,
+                Some(on_foreground),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            );
+            let _timer = SetTimer(None, 0, 1000, None);
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+                if msg.message == WM_TIMER
+                    && let Some(f) = FOREGROUND_SINK.get()
+                {
+                    f();
+                }
+            }
+            let _ = UnhookWinEvent(hook);
+        })?;
+    Ok(())
+}
+
 /// Windows "Transparency effects" (Settings → Personalisation → Colours). Missing value = on.
 pub fn transparency_enabled() -> bool {
     hkcu_dword(PERSONALIZE, "EnableTransparency") != Some(0)
@@ -757,5 +985,20 @@ mod tests {
         assert_eq!(hkcu_dword(&key, "Nope"), None);
         let _ = taskbar_is_light();
         let _ = transparency_enabled();
+    }
+
+    #[test]
+    fn the_mouse_hook_starts_and_stops_cleanly() {
+        let hook = MouseHook::start(Box::new(|_e| {})).unwrap();
+        drop(hook);
+        // A second hook after the first is gone works too.
+        drop(MouseHook::start(Box::new(|_e| {})).unwrap());
+    }
+
+    #[test]
+    fn foreground_info_reads_without_panicking() {
+        if let Some(f) = foreground_info() {
+            assert!(f.monitor[2] > f.monitor[0] && f.monitor[3] > f.monitor[1]);
+        }
     }
 }
