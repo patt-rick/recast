@@ -1,7 +1,7 @@
 # Recast — Design Spec
 
 - **Date:** 2026-11-18
-- **Status:** Draft, revised after Opus adversarial review. Plan 1 (core: engines, presets, jobs, history, settings, companion window) is implemented, and this spec was updated to match what was built. Plans 2 (drop pad) and 3 (triggers, shell, installer hooks) are still to do.
+- **Status:** Draft, revised after Opus adversarial review. Plans 1 (core: engines, presets, jobs, history, settings, companion window) and 2 (drop pad, backdrop, thumbnails, Tools page) are implemented, and this spec was updated to match what was built. Plan 3 (triggers, shell, first run, installer hooks) is still to do.
 - **Platform (v1):** Windows 10 (2004+) and Windows 11, x64
 - **Visual reference:** `docs/mockups/pad-liquid-glass.html`, variant 4 ("Regular, adapting"). It was built inside the brainstorm companion frame, so open it there for full styling. The geometry and effect values are copied into §4.4.
 
@@ -81,8 +81,8 @@ Only drags that carry **file paths** open the pad. Text, links, and virtual item
 ### 4.2 Pad anatomy
 
 - **Centre disc:** the file's thumbnail (first video frame, image preview, PDF page 1, or a type glyph), plus its name and meta, e.g. `MOV · 1.2 GB · 2:14`. With several files: a stacked thumbnail and "8 files".
-- **Ring:** **six segments** in a fixed clockwise order starting at 12 o'clock. Each shows a line icon, a short label (`MP3`) and, on hover, a pill outside the ring with the full description (`Audio only · MP3`).
-- **More:** if more than six tools apply, segment 6 becomes **More**. Activating it (hovering for 600 ms mid-drag, or clicking) cross-fades the ring to the next page of tools, where segment 1 becomes **Back**.
+- **Ring:** **six fixed slots** in a clockwise order starting at 12 o'clock. Each tool shows a line icon, a short label (`MP3`) and, on hover, a pill with the full description (`Audio only · MP3`). With fewer than six tools, the unused slots are drawn as empty glass that can't be targeted. The pill is placed in the band above or below the ring (upper slots above, lower slots below, clamped to the window), never over the ring.
+- **More:** if more than six tools apply, page 1 shows five tools and **More** in slot 6. Each further page is **Back**, four tools and **More**, or **Back** and up to five tools on the last page. Activating More or Back (clicking, pressing Enter, or hovering for 600 ms **mid-drag only**) cross-fades the ring to that page. A pointer resting on More with no drag in progress never pages by itself.
 - **Engine badge:** a segment whose engine isn't installed shows a small download badge (§7.1).
 
 ### 4.3 Interaction states
@@ -97,7 +97,8 @@ running ──► failed (⚠ for 2 s, notification) ──► closed
 running ──new trigger──► the running job continues in Activity; the pad resets to opening with the new files
 ```
 
-- **Drop on the centre disc:** no-op, and the pad stays open.
+- **Drop on the centre disc:** no-op, and the pad stays open. The same goes for a drop or click in a gap between segments: near-misses do nothing. Only a drop or click outside the ring band closes the pad. While the pointer is in the gap between two segments, the one it just left stays targeted, so the highlight doesn't flicker.
+- **Waiting state:** a pad opened mid-drag with no files yet (Plan 2's tray "Drop pad") shows the disc title "Drop files here" and six empty slots, without taking focus, until the files arrive.
 - **Dismissal while dragging:** while the pad is open, the core polls `GetCursorPos` at 60 Hz, because Tauri sends no positions after `Leave`. "Leaves the pad by > 80 px for 600 ms" is measured from that poll.
 - **One pad at a time:** a trigger while the pad is open reuses it (see the last transition above).
 
@@ -105,7 +106,7 @@ running ──new trigger──► the running job continues in Activity; the pa
 - **Notifications** for jobs are suppressed whenever the companion window is visible and focused, whichever section (Activity, Library, Settings) is showing: the Activity row already says it. Engine-install failures still notify.
 - **Done:** Windows notification, "holiday.mp3 ready", with a **Show in folder** action. A batch of **3 or more** files sends **one** combined notification when the batch ends ("8 files converted · 1 failed").
 - **Failed:** notification, "Couldn't convert holiday.mov", with a **Details** action that opens Activity at that job.
-- **Keyboard:** when the pad is open, ←/→ (or Tab) move around the ring, Enter runs the focused segment, and Esc closes.
+- **Keyboard:** when the pad is open, ←/→ (or Tab) move around the ring over the targetable slots only, Enter runs the focused segment, and Esc closes. Paging with the keyboard moves focus to the first tool on the new page (or the first active slot if the page has none).
 
 ### 4.4 Visual spec (Liquid Glass, regular, adapting)
 

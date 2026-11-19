@@ -1,7 +1,7 @@
 /** Draws one Frame onto the pad canvas with Canvas 2D (spec §4.4 rendering strategy). */
 import type { Frame, SlotFrame } from "../frame";
 import { BLUE } from "../frame";
-import { CX, CY, SIZE, TH, circlePath, slotAngle } from "../geometry";
+import { CX, CY, SIZE, circlePath } from "../geometry";
 import { iconPath, kindIcon } from "../icons";
 import type { GlassSource } from "./backdrop";
 
@@ -65,9 +65,10 @@ function drawGlass(ctx: CanvasRenderingContext2D, dpr: number, g: GlassSource | 
     ctx.translate(q.ox, q.oy);
     ctx.scale(q.mag, q.mag);
     ctx.translate(-q.ox, -q.oy);
-    ctx.globalAlpha = q.opacity;
-    ctx.drawImage(g.raw, 0, 0, SIZE, SIZE);
-    ctx.globalAlpha = q.opacity * q.blurMix; // cross-fade raw to blurred (deviation 6)
+    // Cross-fade raw to blurred (deviation 6): once materialized, no sharp backdrop shows through.
+    ctx.globalAlpha = q.opacity * (1 - q.blurMix);
+    if (ctx.globalAlpha > 0.001) ctx.drawImage(g.raw, 0, 0, SIZE, SIZE);
+    ctx.globalAlpha = q.opacity * q.blurMix;
     ctx.drawImage(q.light ? g.light : g.dark, 0, 0, SIZE, SIZE);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.globalAlpha = 1;
@@ -149,16 +150,17 @@ function drawSymbol(ctx: CanvasRenderingContext2D, s: SlotFrame, dpr: number) {
   ctx.fillText(what.label, 0, 15);
   ctx.restore();
   if (s.badge) {
-    const ca = slotAngle(s.index);
-    const bx = s.sx + (TH / 2 - 12) * Math.cos(ca) + 18 * Math.cos(ca + Math.PI / 2);
-    const by = s.sy + (TH / 2 - 12) * Math.sin(ca) + 18 * Math.sin(ca + Math.PI / 2);
+    // Top-right of the icon, in screen space, so it never covers the label.
+    const k = s.symbolScale;
+    const bx = s.sx + 15 * k;
+    const by = s.sy - 22 * k;
     ctx.save();
     ctx.globalAlpha = s.symbolAlpha;
     ctx.fillStyle = s.badge === "warning" ? "rgba(255,159,10,0.95)" : `rgba(${BLUE},0.95)`;
     ctx.beginPath();
-    ctx.arc(bx, by, 8, 0, Math.PI * 2);
+    ctx.arc(bx, by, 8 * k, 0, Math.PI * 2);
     ctx.fill();
-    drawIcon(ctx, s.badge === "warning" ? "warning" : "download", bx, by, 11, "#fff");
+    drawIcon(ctx, s.badge === "warning" ? "warning" : "download", bx, by, 11 * k, "#fff");
     ctx.restore();
   }
 }

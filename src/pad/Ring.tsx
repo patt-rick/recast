@@ -1,10 +1,11 @@
 /** The ring: one canvas for the glass, a small DOM overlay for the disc text and pill. */
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { formatBytes } from "../shared/format";
 import type { PadModel } from "../shared/types";
 import { buildFrame, restSprings, springsSettled, stepRetract, stepSprings, type Spring } from "./frame";
 import { OPEN_MS, PAGE_FADE_MS } from "./anim";
-import { CX, CY, R1, SIZE, slotAngle } from "./geometry";
+import { SIZE } from "./geometry";
+import { clampPillX, pillAnchor } from "./pill";
 import { hitTest } from "./hitTest";
 import { discText } from "./disc";
 import { label } from "./progress";
@@ -39,6 +40,8 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, waiti
   const canvas = useRef<HTMLCanvasElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
+  const pillEl = useRef<HTMLDivElement>(null);
+  const [pillW, setPillW] = useState(0);
   const { state, dispatch, batch, running, openedAt } = pad;
   const tgt = target(state);
   const page = currentPage(state);
@@ -172,9 +175,13 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, waiti
           tslot.preset.warning,
         ].filter(Boolean) as string[]
       : tslot?.kind === "more" ? ["More conversions"] : tslot?.kind === "back" ? ["Back"] : null;
-  const pa = tgt != null ? slotAngle(tgt) : 0;
-  const pillX = Math.min(SIZE - 90, Math.max(90, CX + (R1 + 26) * Math.cos(pa)));
-  const pillY = Math.min(SIZE - 24, Math.max(24, CY + (R1 + 26) * Math.sin(pa)));
+  const anchor = pillAnchor(tgt ?? 0);
+  const pillKey = pill ? pill.join("|") : "";
+  useLayoutEffect(() => {
+    if (pillEl.current) setPillW(pillEl.current.offsetWidth);
+  }, [pillKey, tgt, busyNow]);
+  const pillX = clampPillX(anchor.x, pillW);
+  const pillY = anchor.y;
   const status =
     state.phase.name === "done" ? "Done"
       : state.phase.name === "failed" ? state.phase.message
@@ -208,7 +215,7 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, waiti
         <div className="disc-meta">{status ?? text.note ?? text.meta}</div>
       </div>
       {pill && !busyNow && (
-        <div className="pill" style={{ left: pillX, top: pillY }} role="tooltip">
+        <div ref={pillEl} className="pill" style={{ left: pillX, top: pillY }} role="tooltip">
           {pill.map((l) => (
             <div key={l}>{l}</div>
           ))}
