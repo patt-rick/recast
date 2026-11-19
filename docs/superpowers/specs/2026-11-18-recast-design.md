@@ -120,22 +120,24 @@ Values are at 1× scale and scale with DPI. The source of truth is the mockup's 
 | Glass fill | the backdrop snapshot (§6.8) clipped to the segment, **magnified 1.10×** about the segment centre (1.15× when targeted), blurred 5 px (6 px over light), saturate 1.6, brightness 1.08 |
 | Rendering strategy (60 fps) | the snapshot is blurred and saturated **once** per open into two pre-processed bitmaps (5 px and 6 px, as `ImageBitmap`). Per frame, only transforms and clip paths change; no CSS `filter` or `backdrop-filter` is animated. The ring is drawn into a single canvas layer (2D or WebGL), not six DOM clones. Budget: ≤ 4 ms per frame on integrated graphics, measured during development |
 | Rim | 1.2 px stroke, diagonal gradient: white 95% (top-left) → 25% → 12% → 60% (bottom-right) |
-| Inner light | 7 px white stroke at 35% opacity (52% targeted), clipped inside the shape, blurred 2.2 px |
+| Inner light | 7 px white stroke at 35% opacity (52% targeted), clipped inside the shape. Drawn on the canvas with `shadowBlur` 4.4 px (about 2 × the 2.2 px SVG std-dev), an approximation of the mockup's Gaussian blur, because per-frame `ctx.filter` blurs are too slow |
+| Hover pill | solid `rgba(30,30,36,.88)` fill, in the band above or below the ring (§4.2). `backdrop-filter` inside a transparent webview can't see the desktop, so it isn't used |
 | Shadow | `0 8px 16px rgba(0,0,0,.16)`, `0 1px 2px rgba(0,0,0,.12)` |
 | Targeted segment | lifts 9 px outward, +8% thickness, +4% angular width, radial glow (r = 80) at the pointer, tint system blue `rgba(10,132,255,.45)` (`.80` over light). All values spring-smoothed (lerp 0.2 per frame) |
 | Light adaptation | per segment: if the mean luminance of the backdrop under it is > 0.6, use light glass (tint white 12%, brightness 1.0, saturate 1.2) and **dark symbols** `#1d1d1f`; a targeted segment returns to white symbols on blue |
-| Open animation | segments materialize with a 55 ms stagger and 520 ms ease-out-cubic: angular width 55%→100%, thickness 80%→100%, magnification 1.0→1.10, blur 0→5 px |
+| Open animation | segments materialize with a 55 ms stagger and 520 ms ease-out-cubic: angular width 55%→100%, thickness 80%→100%, magnification 1.0→1.10, blur 0→5 px. The blur is a cross-fade from the unblurred capture to the pre-blurred bitmap (glass alpha follows the ease), not an animated blur radius, which would break the frame budget |
 | Type | Segoe UI Variable (system), labels 11 px semibold; icons 23 px line icons, 1.75 stroke |
-| Reduced transparency (Windows setting) | glass replaced by a solid fill (`#2b2b30` 92% / `#f2f2f5` 92%) with rims kept |
-| Reduced motion | no lift, scale or materialize animation. Opening is instant and targeting is a tint change only |
+| Reduced transparency (Windows setting) | glass replaced by a solid fill (`#2b2b30` 92% / `#f2f2f5` 92%) with rims kept. Read from `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\EnableTransparency` (0 = reduced; a missing value = on) and sent to the pad with `pad://open`. A failed backdrop capture uses the same look |
+| Reduced motion | no lift, scale or materialize animation. Opening is instant and targeting is a tint change only. Read from the `prefers-reduced-motion` media query, which WebView2 maps to Windows' "Show animations" setting |
 
 ### 4.5 Companion window
 
 A 760 × 520 window opened from the tray icon (left-click) or the tray menu. Same glass language, with a sidebar of four sections:
 
-1. **Activity:** running jobs (progress, ETA, Cancel) above history (newest first: Show in folder, Open, Retry, Remove from list). Dropping files anywhere in the view opens the ring inline. Failed jobs expand to show a plain-language reason and the last 30 lines of engine output.
-2. **Tools:** multi-file jobs that need ordering. **Merge PDFs** and **Images → PDF** use a reorderable list (drag handles, or add files) and a Run button. **Split PDF** takes a page-range field (`1-3, 5, 8-`).
-   - Reordering uses a **pointer-event sorter (dnd-kit)**, not HTML5 drag-and-drop: Tauri's `dragDropEnabled` must stay on so the window accepts file drops, and on Windows that disables HTML5 drag-and-drop inside the webview.
+1. **Activity:** running jobs (progress, ETA, Cancel) above history (newest first: Show in folder, Open, Retry, Remove from list). Dropping files anywhere in the view opens the ring inline, over the list, in the **solid look** (the companion isn't excluded from capture, so a glass ring would capture itself). It scales down to fit a short window. There is no mid-drag targeting in the companion: a drop opens the ring, and you then click a segment or use the keyboard. Failed jobs expand to show a plain-language reason and the last 30 lines of engine output.
+2. **Tools:** multi-file jobs that need ordering. **Merge PDFs** and **Images → PDF** use a reorderable list (files dropped on the page or added with a picker) and a Run button. **Split PDF** takes one PDF and a page-range field (`1-3, 5, 8-`).
+   - Reordering uses a **dnd-kit sorter with pointer and keyboard sensors** (drag the handle, or focus it, press Space, use the arrow keys, press Space again), not HTML5 drag-and-drop: Tauri's `dragDropEnabled` must stay on so the window accepts file drops, and on Windows that disables HTML5 drag-and-drop inside the webview. One drag-drop listener serves the whole companion and routes each drop to Activity or Tools by the visible section.
+   - **Split semantics:** each comma-separated range becomes **its own PDF**, saved in the `<name> (pages)` folder next to the source (named as in §5.7). Files are `page-N.pdf` for a single page, `pages-A-B.pdf` for a span and `pages-A-end.pdf` for an open end, so `1-3, 5, 8-` gives `pages-1-3.pdf`, `page-5.pdf` and `pages-8-end.pdf`. An empty field keeps the one-PDF-per-page Split of §5.4. Ranges are validated before the job starts, in the field (as you type) and again in Rust; with qpdf installed, a page past the end of the document is an early, plain error. Repeated identical ranges are written once.
 3. **Library:** one row per engine: name, version, size, licence and status (Not installed / Installing x% / Installed / Damaged). Actions: Download, Remove, Verify. A footer shows the total disk used. Future engines (LibreOffice, LaTeX) appear here as "Coming later".
    - **Third-party notices:** a view listing every engine and bundled component (including 7-Zip, §6.3) with its licence text (a Licence button expands it inline, whether or not the engine is installed; GPL-3.0, GPL-2.0, AGPL-3.0, Apache-2.0 and ImageMagick texts ship with Recast), upstream homepage and, for GPL/AGPL/LGPL items, where to get the corresponding source.
 4. **Settings:**
@@ -147,7 +149,7 @@ A 760 × 520 window opened from the tray icon (left-click) or the tray menu. Sam
    - **Start with Windows:** default on.
    - **Explorer entry:** on/off.
 
-Closing the window hides it. Recast keeps running in the tray, and "Quit" in the tray menu exits.
+Closing the window hides it. Recast keeps running in the tray, and "Quit" in the tray menu exits. The tray menu is Open Recast, **Convert files…** (a file picker, then the pad opens at the cursor in click mode), **Drop pad** (opens the pad in drag mode with no files, to try mid-drag targeting; a stand-in that Plan 3's triggers replace) and Quit.
 
 ### 4.6 First run
 
@@ -168,6 +170,9 @@ Presets are **data**, in `src-tauri/presets/presets.toml`. Each preset has:
 - `skip_formats` (optional): canonical input formats the preset is hidden for. Image Shrink is hidden for GIF and ICO
 - `keep_same_format`: exempts the preset from same-format hiding (the data-driven form of the Shrink/Compress exception)
 - `hide_when_multi`: hidden when more than one file is dropped
+- `tools_only`: never offered in the ring; reached only from the Tools page. Used by `pdf-extract`
+- `warn_over_s` and `warn_text` (together): a caution shown in the ring (the hover pill) when any input is longer than `warn_over_s` seconds. It never blocks the job. A duration is known only when ffprobe has run, i.e. when FFmpeg is installed, so without FFmpeg there is no warning
+- `{range}` and `{range_name}` placeholders: a pass that uses them runs once per page range the job was started with (see `pdf-extract` in §5.4)
 - Same-format skipping is per file at run time: in a mixed batch (PNG + JPEG → PNG), an input already in the preset's output format finishes as `skipped` with `SAME_FORMAT` ("x.png is already PNG.") and is not re-encoded. `"same"` outputs for an extensionless input take the extension of the sniffed format (`jpg`, `tif`, `heic`, otherwise the format name).
 - `.ts` is video only when the content looks like MPEG-TS (sync byte 0x47 at offsets 0 and 188); otherwise (TypeScript) the file is not offered video presets.
 - `discard_if_not_smaller`: if the output isn't smaller than the input, it is discarded and the job reports `ALREADY_SMALL` (image Shrink, PDF Compress)
@@ -184,7 +189,7 @@ The ring order is the order in the table, and anything past five spills into Mor
 |---|---|---|
 | MP3 | ffmpeg | `-vn -c:a libmp3lame -b:a {mp3_kbps}k` (default 192). Hidden when ffprobe finds no audio stream |
 | MP4 | ffmpeg | `-c:v libx264 -crf 23 -preset medium -pix_fmt yuv420p -vf scale=trunc(iw/2)*2:trunc(ih/2)*2 -c:a aac -b:a 160k -movflags +faststart`. `yuv420p` and even dimensions keep 10-bit iPhone/HDR sources playable everywhere |
-| GIF | ffmpeg | `fps={gif_fps},scale={gif_width}:-1:flags=lanczos` with palettegen/paletteuse (defaults 12 fps, 480 px). The job warns if the source is > 60 s |
+| GIF | ffmpeg | `fps={gif_fps},scale={gif_width}:-1:flags=lanczos` with palettegen/paletteuse (defaults 12 fps, 480 px). `warn_over_s = 60`: the ring warns ("Over a minute long: the GIF will be large and slow to make.") if the source is longer than 60 s and its duration is known |
 | WebM | ffmpeg | `-c:v libvpx-vp9 -crf 32 -b:v 0 -c:a libopus -b:a 128k` |
 | Shrink | ffmpeg | two-pass x264 to **{target_mb}** MB (default 25), with `-pix_fmt yuv420p` and even dimensions as for MP4. Video kbps = (target_bits × 0.97) / duration − audio 128k; the 3% covers container overhead so the output lands ≤ target. Pass 1: `-pass 1 -passlogfile {tmp}\pass -an -f null NUL`; pass 2: `-pass 2 -passlogfile {tmp}\pass`. The pass logs (`.log`, `.mbtree`) live in the job's temp dir (§6.4), so concurrent jobs never collide, and are deleted with it. **Skipped with a message** if the source is already ≤ target. **Fails up front with a reason** if the result would be < 150 kbps. Output `name (compressed).mp4` |
 | M4A | ffmpeg | `-vn -c:a aac -b:a {aac_kbps}k` (default 192). Hidden when ffprobe finds no audio stream |
@@ -212,6 +217,7 @@ All single-image presets read **`{in}[0]`** (first frame or page), so animated G
 | Compress | gs | `-sDEVICE=pdfwrite -dPDFSETTINGS=/ebook`. `name (compressed).pdf`. If the result isn't smaller than the input, it's discarded and the job reports "Already as small as it gets" (the original is kept) |
 | To images | gs | `png16m`, 150 dpi, into folder `name (pages)/page-001.png` |
 | Split | qpdf | `--split-pages` into folder `name (pages)/` |
+| **Split by pages** (`pdf-extract`, `tools_only`) | qpdf | `--empty --pages a.pdf <range> -- <out_dir>\<range_name>.pdf`, once per range in the job's options (Tools → Split PDF, §4.5). Output folder `name (pages)/`, files `page-N.pdf`, `pages-A-B.pdf`, `pages-A-end.pdf`. Needs ranges; with none, Tools runs the plain Split above |
 | **Merge** (≥2 PDFs) | qpdf | `--empty --pages a.pdf b.pdf … --`, in drop order. Output `merged.pdf` in the first file's folder (collisions → `merged (1).pdf`) |
 
 ### 5.5 Ebooks / text (`epub docx odt md markdown html htm txt rtf`)
@@ -247,12 +253,19 @@ EPUB, DOCX, HTML (`--standalone --embed-resources`, so images are inlined), Mark
               (in %LOCALAPPDATA%\Recast\engines\<id>\<version>\)
 ```
 
-**Data flow for one drop:** trigger → pad opens → `inspect(paths)` returns a `PadModel` (kinds, thumbnail, available presets with engine status) → the user targets a segment → `start_jobs(preset_id, paths)` → `jobs` checks preconditions (§7), ensures the engine, then spawns → `job://progress` events reach the pad and Activity → the temp file is renamed to its final name → `job://done` → notification.
+**Data flow for one drop:** trigger → pad opens → `inspect(paths)` returns a `PadModel` (kinds, available presets with engine status and warnings; the thumbnail follows separately from `thumbnail(path)`) → the user targets a segment → `start_jobs(preset_id, paths, options?)` → `jobs` checks preconditions (§7), ensures the engine, then spawns → `job://progress` events reach the pad and Activity → the temp file is renamed to its final name → `job://done` → notification.
 
 ### 6.1 `detect`
 - **Input:** a path. **Output:** `FileInfo { path, kind: Video|Audio|Image|Pdf|Text|Unknown, ext, size, duration_s?, thumb? }`.
-- Uses magic bytes (the `infer` crate) and falls back to the extension. Duration and thumbnail come from ffprobe/ffmpeg when FFmpeg is installed; otherwise the disc shows a type glyph.
+- Uses magic bytes (the `infer` crate) and falls back to the extension. Duration comes from ffprobe when FFmpeg is installed.
 - A `.mov` containing only audio counts as Audio (ffprobe stream check) when ffprobe is available.
+- **Thumbnails** come from a separate command, `thumbnail(path)`, not from `inspect`, so the ring never waits on ffmpeg. It returns PNG bytes, or the file's own bytes for native formats, or nothing (the disc shows a type glyph):
+  - PNG, JPEG, GIF, WebP, BMP, AVIF and ICO up to 25 MB are sent as their own bytes for the webview to decode.
+  - HEIC, TIFF and JXL (and native formats over 25 MB) go through ImageMagick (`-thumbnail 176x176`, first frame), video through ffmpeg (a frame at 1 s, else at 0 s, scaled to 176 px wide), and PDF page 1 through Ghostscript (`-dSAFER`, 48 dpi). Each runs only if that engine is already installed and is never downloaded for a thumbnail. Audio and text always get the glyph.
+  - Each run has a **5 s cap**, and the output must be a PNG of at most 8 MB.
+  - **Plain-path rule:** ImageMagick and Ghostscript interpret some filename characters, so they only get paths made of plain ASCII without `%`, `[` or `]` and not starting with `-`. Anything else gets the glyph.
+  - **Lease:** the engine is leased while it runs, so it can't be removed or repaired underneath the thumbnail. A thumbnail never waits for an install or removal; if the engine is busy it gets the glyph.
+  - **Recent-paths allowlist:** `thumbnail` only serves paths that a recent `inspect` returned (the last 256). This is **defence in depth, not a security boundary**: it limits `thumbnail` to files the user dropped or picked, but the webview can call `inspect` on any path itself.
 
 ### 6.2 `presets`
 - Loads and validates `presets.toml` at startup. Validation checks for unique ids, known engines and placeholders, and a valid `out_naming`.
@@ -302,25 +315,35 @@ EPUB, DOCX, HTML (`--standalone --embed-resources`, so images are inlined), Mark
 ### 6.5 `history`
 - SQLite at `%LOCALAPPDATA%\Recast\recast.db`, via `rusqlite`.
 - **Tables:**
-  - `jobs`: id, preset_id, inputs JSON, output, status, error_code, error_detail, stderr_tail, started_at, ended_at, temp_path
+  - `jobs`: id, preset_id, inputs JSON, output, status, error_code, error_detail, stderr_tail, started_at, ended_at, temp_path, `options` (JSON, e.g. `{"ranges":"1-3, 5"}`, null when a job has none)
   - `meta`: schema version
+- **Schema 2** adds the `options` column so Retry re-runs a job with the same page ranges. An older database is migrated with `ALTER TABLE` on open. The stored `schema_version` is only ever raised: a database written by a newer Recast keeps its version.
 - Keeps the last 500 jobs, and the oldest are pruned. "Remove from list" deletes only the row, never files.
 
 ### 6.6 `settings`
 JSON at `%APPDATA%\Recast\settings.json`, with a typed struct, defaults for every field and a `version` for migrations. Unknown fields are kept; invalid values fall back to their defaults and are logged. A read error other than "file missing" never leads to overwriting the file: the loaded settings are read-only for that run, and a corrupt file is kept as `settings.json.bad`.
 
 ### 6.7 `triggers`
-- **Pad window lifecycle:** the pad's WebView2 window is **created hidden at startup** and reused, because creating one on demand takes hundreds of ms and would miss the shake gesture. Opening it means repositioning and calling `ShowWindow(SW_SHOWNOACTIVATE)` when a drag is in progress, or a normal activating show in click mode. OLE re-checks the window under the cursor on every move, so a pad shown mid-drag receives `DragEnter` for the ongoing drag.
+- **Pad window lifecycle** (`pad.rs`): the pad's WebView2 window is **created hidden at startup** and reused, because creating one on demand takes hundreds of ms and would miss the shake gesture. Triggers call `pad::open(app, paths, PadMode::Drag | Click)`.
+  - **Generations:** every open and every close bumps a generation counter, held with the page's `ready` flag and any parked open under one lock. The generation travels in `pad://open`, and `pad_show`, `pad_close` and `pad_track_cursor` from the page are ignored unless they carry the current one, so a late call from a dismissed pad can't hide or stop a newer one. An open that arrives before the page has registered its listeners (`pad_ready`) is parked and delivered then.
+  - **Placement:** the window is centred on the cursor and clamped to that monitor's work area, positioned first and then sized so the size is read at the target monitor's DPI.
+  - **Click mode** positions the window but doesn't show it. The page calls `pad_show(generation)` after its first drawn frame, which shows and focuses it, so a slow `inspect` never leaves an invisible window swallowing clicks.
+  - **Drag mode** shows at once with `ShowWindow(SW_SHOWNOACTIVATE)` (no focus, so the drag continues), because OLE re-checks the window under the cursor on every move and a pad shown mid-drag receives `DragEnter` for the ongoing drag. After a drop on the pad, the session becomes click mode and the pad takes focus.
+  - **Hiding:** tao doesn't know about a window shown behind its back, so its own `hide()` can do nothing for a drag-mode pad. Closing therefore also calls raw `ShowWindow(SW_HIDE)` through the platform layer.
+  - **Alt+F4** (a close request on the pad) is prevented: the pad receives `pad://dismiss` and hides. The window is never destroyed.
+  - **Cursor poll:** a drag-mode open starts a thread that emits `pad://cursor` (the cursor relative to the pad, in logical px) every 16 ms, stopping when the pad is hidden. A poll epoch counter retires old pollers, so a close followed by a quick reopen can't leave two running. The page ignores positions until the cursor has been inside once, so a pad opened at the edge doesn't dismiss itself.
+  - **Main thread:** all window operations and generation changes run on the main thread, in order, whichever thread asked (IPC commands, Plan 3's hook threads).
 - **Edge handle** and **desk pad** are tiny Tauri windows. They use Tauri's drag-drop events (`Enter` / `Over{position}` / `Drop{paths}` / `Leave`), and Enter opens the pad.
 - **Shake:** a `WH_MOUSE_LL` hook on a dedicated thread, implementing the detector in §4.1. The detector is a pure function over a sample stream, so it can be unit-tested. The hook does nothing while the left button is up. After arming, the confirmation step checks `GetCursorInfo` for a drag cursor or waits for a `DragEnter`, within the 300 ms window from §4.1. Fullscreen detection compares the foreground window's rect with its monitor's rect.
 - **Edge-handle auto-hide** uses the same fullscreen check, run on foreground-change events (`SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`) and once a second.
 - **Mid-drag targeting:** while a drag is over the pad window, `Over{position}` events drive hit-testing, because ordinary mouse events don't fire during an OLE drag. `Drop` fires the targeted segment.
 
 ### 6.8 `backdrop`
-- On opening, the pad captures the screen rectangle under it via the platform layer (Windows: Desktop Duplication/GDI `BitBlt` of the monitor region).
-- The pad window has `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, so it never captures itself and can re-capture if it moves.
-- The image goes to the webview as an in-memory blob; it is never written to disk and is dropped when the pad closes. Per-segment luminance (for §4.4 light adaptation) is computed from the same image.
-- If capture fails, the pad falls back to the reduced-transparency look.
+- On opening, the pad page calls `capture_backdrop()`, and Rust captures the screen rectangle under the pad window with a **GDI `BitBlt`** from the screen DC (`SRCCOPY`, without `CAPTUREBLT`, so the cursor doesn't flicker; layered windows of other apps are therefore missing from the image). Only the pad window may ask, and only for its own rectangle (at most 4096 px a side).
+- The pad window has `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`, set once at startup, so it never captures itself.
+- **Wire format:** `tauri::ipc::Response` bytes: u32 LE width, u32 LE height, then RGBA rows top-down with alpha forced opaque. The webview turns it into `ImageData` and the two pre-blurred `ImageBitmap`s (§4.4). It is never written to disk and is released when the pad closes.
+- **Luminance is computed in the webview**, from the same image, by a pure function: Rec. 709 luma on sRGB values (no linearisation), averaged per segment. A mean above 0.6 means light glass (§4.4). Rust only captures.
+- If capture fails, or Windows' transparency is reduced, the pad uses the reduced-transparency look; the error is logged, not shown.
 
 ### 6.9 `platform` (the macOS seam)
 The following trait-like interfaces have a Windows implementation in v1; a macOS implementation is added later:
@@ -345,14 +368,16 @@ Nothing outside `platform` may call OS APIs directly.
 ### 6.11 IPC (typed, in `src/shared/ipc.ts` mirrored in Rust)
 - **Commands:**
   - `inspect(paths)`
-  - `start_jobs(preset_id, paths)`, `cancel_job(id)`, `retry_job(id, fallback)`, `list_jobs(before_seq)` (keyset paging, 50 rows, newest first; each record carries its `seq`), `remove_job(id)`. `retry_job` with `fallback = true` re-runs into the fallback folder (§5.7)
+  - `start_jobs(preset_id, paths, options?)` (`options` is `JobOptions { ranges? }`, validated before anything is queued; a preset that takes no ranges refuses them), `cancel_job(id)`, `retry_job(id, fallback)`, `list_jobs(before_seq)` (keyset paging, 50 rows, newest first; each record carries its `seq`), `remove_job(id)`. `retry_job` with `fallback = true` re-runs into the fallback folder (§5.7)
   - `engines_list()`, `engine_install(id)`, `engine_remove(id)`, `engine_verify(id)`
   - `get_settings()`, `set_settings(patch)`
   - `reveal_job(id)`, `open_job(id)`, `notices()`, `notice_text(index, name)`
-  - Planned for Plan 2: `capture_backdrop()`
+  - `thumbnail(path)` returns bytes (§6.1) and `capture_backdrop()` returns the backdrop wire format (§6.8), both as binary `tauri::ipc::Response`s. `capture_backdrop` refuses any window but the pad.
+  - Pad window: `pad_ready()` (the page's listeners are registered), `pad_show(generation)`, `pad_close(generation)` and `pad_track_cursor(on, generation)`. Each of the last three is a no-op if `generation` is stale (§6.7).
+  - Debug builds only: `debug_open_pad(paths, drag)` opens the pad as a trigger would, for testing. It is refused in release builds, and goes away when Plan 3's real triggers exist.
   - There are deliberately no generic `reveal(path)` or `open(path)` commands, because the webview could pass them any path. `reveal_job` and `open_job` look up the history row and require status `done` and an existing output. `notice_text(index, name)` returns the licence text of a notice (by its index in `notices()`, and fails with "The list changed; reopen Library." if the notice at that index no longer has that name): the installed engine's own licence file (plain text, capped at 512 KB) when present, otherwise the text bundled at `<resource dir>/licenses/` (source: `src-tauri/licenses/`).
   - Commands are `async` and run their blocking work off the main thread. Rust and TS mirror each other (`src/shared/ipc.ts`: `ipc.revealJob`, `ipc.openJob`, `ipc.noticeText`).
-- **Events:** `job://*`, `engine://progress|done|failed`, `pad://open{paths, anchor}`.
+- **Events:** `job://*`, `engine://progress|done|failed`, and to the pad window `pad://open{paths, mode, reduced_transparency, generation}` (`mode` is `click` or `drag`), `pad://cursor{x, y}` (logical px relative to the pad, drag mode only) and `pad://dismiss` (the window was asked to close).
 
 ### 6.12 Installer and uninstall
 - Tauri NSIS bundle, **per-user** install with no admin rights. **WebView2 install mode: `downloadBootstrapper`**, so the installer stays small and fetches WebView2 only on the rare Windows 10 machine without it.
@@ -360,20 +385,26 @@ Nothing outside `platform` may call OS APIs directly.
 - **`installerHooks` → `NSIS_HOOK_POSTUNINSTALL`** removes everything Recast created outside its install folder: the HKCU `*\shell\Recast` verb, the `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` start-with-Windows value, and `%LOCALAPPDATA%\Recast` (engines, history, logs). `%APPDATA%\Recast` (settings) is removed only if the user ticks "Delete app data". Recast's data paths are fixed to these `Recast` folders, not Tauri's identifier-named folders, so the hook and the app agree.
 
 ### 6.13 Repo layout
-This is the layout as built by Plan 1. The pad, handle, desk pad, triggers, shell and backdrop modules arrive with Plans 2 and 3.
+This is the layout as built by Plans 1 and 2. The handle, desk pad, triggers and shell modules arrive with Plan 3.
 ```
 recast/
-  index.html  package.json  vite.config.ts  tsconfig.json
+  index.html  pad.html  package.json  vite.config.ts  tsconfig.json   # two Vite entries
   src/                       # React + TS
     main.tsx
-    companion/               # App, Activity, Library, Settings (+ companion.css, jobs.ts)
-    shared/                  # ipc.ts, types.ts, format.ts
+    companion/               # App, Activity, InlineRing, Tools, SortableList, Library, Settings,
+                             # dragRouter.ts (one drag listener), toolList.ts, jobs.ts (+ companion.css)
+    pad/                     # the pad window and the ring (shared with the companion's InlineRing):
+                             # main.tsx, PadApp.tsx, Ring.tsx, usePad.ts; pure logic with tests: geometry,
+                             # hitTest, paging, states (§4.3), progress, luminance, frame, anim, cursor,
+                             # disc, pill; icons.ts; glass/backdrop.ts + glass/renderer.ts (canvas); CSS
+    shared/                  # ipc.ts, types.ts, format.ts, pageRanges.ts (mirrors Rust), useThumb.ts
   src-tauri/
     src/
       lib.rs  main.rs  app_state.rs  ipc.rs  tray.rs  logging.rs  paths.rs
       detect.rs  pad_model.rs  history.rs  settings.rs  proc.rs
+      pad.rs  backdrop.rs  thumbs.rs   # pad window controller, capture wire format, thumbnails
       fsutil.rs  lockutil.rs  testutil.rs
-      presets/    mod.rs  available.rs  command.rs  naming.rs  catalog_tests.rs  snapshots/
+      presets/    mod.rs  available.rs  command.rs  naming.rs  ranges.rs  catalog_tests.rs  snapshots/
       engines/    mod.rs  manifest.rs  install.rs  caps.rs
       jobs/       mod.rs  runner.rs  progress.rs  notify.rs  explain.rs  math.rs
       platform/   mod.rs  win.rs
@@ -382,11 +413,11 @@ recast/
     bin/7z.exe  7z.dll  7zip-License.txt
     examples/fake_engine.rs      # test engine for the watchdog, kill and runner tests
     tests/engines_integration.rs # real-engine tests (feature `engines`)
-    capabilities/default.json  tauri.conf.json
+    capabilities/default.json  pad.json  tauri.conf.json   # pad.json: core:default only, for the pad window
   scripts/refresh-engines.mjs  fetch-7zip.mjs
   docs/
 ```
-Still to come: `src-tauri/windows/hooks.nsh` (`NSIS_HOOK_POSTUNINSTALL`, section 6.12), `docs/qa-checklist.md`, and the pad, handle and deskpad front ends. The Windows implementation is `platform/win.rs`, because a module named `windows` would shadow the `windows` crate.
+Still to come: `src-tauri/windows/hooks.nsh` (`NSIS_HOOK_POSTUNINSTALL`, section 6.12), `docs/qa-checklist.md`, and the handle and desk-pad front ends. The Windows implementation is `platform/win.rs`, because a module named `windows` would shadow the `windows` crate.
 
 ---
 
@@ -432,7 +463,7 @@ Logs go to `%LOCALAPPDATA%\Recast\logs\recast.log` (rotating, 5 × 1 MB). Logs a
 | Rust integration | tiny fixtures (2 s video, 10-bit HEVC iPhone clip, video with no audio, short audio, PNG with alpha, animated GIF, HEIC, 3-page PDF, EPUB, MD with an image, TXT) through **every preset** with the real engines (downloaded once, cached in CI). Filenames include **Unicode** (`café 日本.mov`), a **path over 260 characters**, and **`%`, `[ ]` and a leading `-`**. Assert the output exists and has the right type (`ffprobe` / `magick identify` / `qpdf --check`), alpha is kept where expected, MP4 is 8-bit `yuv420p`, Shrink is ≤ the target, two concurrent Shrink jobs don't collide, and no temp dir is left behind | `cargo test --features engines` |
 | Engines | install from the manifest, a corrupted download is rejected, an interrupted install leaves nothing, Verify detects tampering, Ghostscript unpacks via 7-Zip without running its installer and `gswin64c` works from the unpacked folder, the `magick -list format` capability check | `cargo test --features engines` |
 | Front end | `rsector` geometry; hit-testing (point → segment, including gaps, More and Back); ring paging; light-adaptation threshold; state machine transitions (§4.3) | Vitest |
-| Manual checklist | real Explorer drags onto the edge handle, desk pad and shake; shake false positives (text selection, painting, a fullscreen game); "Open with Recast" with 1, 20 and 100 files, and the pad taking keyboard focus; the edge handle hiding over a fullscreen video; 100%/150%/200% DPI; two monitors; reduced motion and reduced transparency; keyboard-only pad; dark and light wallpapers; pad frame time on integrated graphics; uninstall leaves no verb, Run value or `%LOCALAPPDATA%\Recast`; first-run welcome; a drag from an elevated app is ignored without errors | `docs/qa-checklist.md`, run before each release |
+| Manual checklist | real Explorer drags onto the edge handle, desk pad and shake; shake false positives (text selection, painting, a fullscreen game); "Open with Recast" with 1, 20 and 100 files, and the pad taking keyboard focus; the edge handle hiding over a fullscreen video; 100%/150%/200% DPI; two monitors; reduced motion and reduced transparency; keyboard-only pad (including paging with More/Back); dark and light wallpapers, checking that segments over light areas flip to dark symbols; the pad absent from its own backdrop (no ghost ring in the glass); `?perf` frame time (open `pad.html?perf`, read `[pad] mean draw … ms` in the console while hovering; budget ≤ 4 ms, also on integrated graphics); a real Explorer drag onto the pad, targeting and dropping on a segment; Tools reordering by mouse and by keyboard, then Merge and Split with valid and invalid ranges; tray **Convert files…** and **Drop pad**; uninstall leaves no verb, Run value or `%LOCALAPPDATA%\Recast`; first-run welcome; a drag from an elevated app is ignored without errors | `docs/qa-checklist.md`, run before each release |
 
 ---
 
