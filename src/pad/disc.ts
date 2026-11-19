@@ -1,4 +1,3 @@
-import { formatBytes } from "../shared/format";
 import type { PadModel } from "../shared/types";
 
 export function formatDuration(s: number): string {
@@ -9,26 +8,17 @@ export function formatDuration(s: number): string {
 }
 
 /**
- * Centre-disc text: name, meta (e.g. "MOV · 1.2 GB · 2:14") and an explanation when nothing applies.
- * `waiting`: a drag-mode pad opened with no files yet (spec A2).
+ * Centre text (§4.2): the name (one file), "N files", or "Drop files here" while waiting
+ * (spec A2); "N skipped" when some couldn't be read; and a note when nothing applies.
+ * Type, size and length are not shown (the owner chose name only, 2026-11-19).
  */
-export function discText(model: PadModel, waiting = false): { title: string; meta: string; note: string | null } {
-  if (waiting) return { title: "Drop files here", meta: "", note: null };
+export function discText(model: PadModel, waiting = false): { title: string; skipped: string | null; note: string | null } {
+  if (waiting) return { title: "Drop files here", skipped: null, note: null };
   const { files } = model;
   const one = files.length === 1 ? files[0] : null;
   const title = one ? one.name : files.length === 0 ? "Nothing to convert" : `${files.length} files`;
-  const base = one
-    ? [
-        one.format.toUpperCase(),
-        formatBytes(one.size),
-        one.duration_s != null ? formatDuration(one.duration_s) : null,
-        one.pages ? `${one.pages} pages` : null,
-      ].filter(Boolean).join(" · ")
-    : files.length > 0
-      ? `${formatBytes(files.reduce((a, f) => a + f.size, 0))} in total`
-      : "";
-  const skipped = model.skipped > 0 ? `${model.skipped} skipped` : "";
-  const meta = [base, skipped].filter(Boolean).join(" · ");
+  // On its own line, so a long name can't push it out of view.
+  const skipped = model.skipped > 0 ? `${model.skipped} skipped` : null;
   const note = model.presets.length > 0
     ? null
     : files.length === 0
@@ -36,5 +26,5 @@ export function discText(model: PadModel, waiting = false): { title: string; met
       : model.open_in_recast
         ? "These files are different kinds. Drop each kind separately."
         : "Recast has no conversions for this file.";
-  return { title, meta, note };
+  return { title, skipped, note };
 }

@@ -80,9 +80,9 @@ Only drags that carry **file paths** open the pad. Text, links, and virtual item
 
 ### 4.2 Pad anatomy
 
-- **Centre disc:** the file's thumbnail (first video frame, image preview, PDF page 1, or a type glyph), plus its name and meta, e.g. `MOV · 1.2 GB · 2:14`. With several files: a stacked thumbnail and "8 files".
-- **Ring:** **six fixed slots** in a clockwise order starting at 12 o'clock. Each tool shows a line icon, a short label (`MP3`) and, on hover, a pill with the full description (`Audio only · MP3`). With fewer than six tools, the unused slots are drawn as empty glass that can't be targeted. The pill is placed in the band above or below the ring (upper slots above, lower slots below, clamped to the window), never over the ring.
-- **More:** if more than six tools apply, page 1 shows five tools and **More** in slot 6. Each further page is **Back**, four tools and **More**, or **Back** and up to five tools on the last page. Activating More or Back (clicking, pressing Enter, or hovering for 600 ms **mid-drag only**) cross-fades the ring to that page. A pointer resting on More with no drag in progress never pages by itself.
+- **Centre:** the file's thumbnail (first video frame, image preview, PDF page 1, or a type glyph), bare: no card or disc behind it, a soft shadow and a contrast halo keep it and the name legible. Under it, only the name; with several files "8 files"; "· 2 skipped" when some couldn't be read. Type, size and length aren't shown (owner, 2026-11-19). A glass disc is drawn only when there are no tiles (the waiting pad, nothing to convert, where it is the drop target and holds the note) and as the solid fill when there is no backdrop.
+- **Ring:** **one tile per tool, at most six per page**, in a clockwise order starting at 12 o'clock. The tiles share the ring evenly: two tools give two half rings, one tool (such as **Open** for mixed kinds) gives the whole ring, and a page with nothing on it shows only the disc. There are no empty tiles (owner request, 2026-11-19; it replaces the first draft's six fixed slots with empty glass). Each tool shows a line icon, a short label (`MP3`) and, on hover, a pill with the full description (`Audio only · MP3`). The pill is placed in the band above or below the ring (upper slots above, lower slots below, clamped to the window), never over the ring.
+- **More:** if more than six tools apply, page 1 shows five tools and **More** in slot 6. Each further page is **Back**, four tools and **More**, or **Back** and up to five tools on the last page. Pages can hold different numbers of tiles, so after a dwell turns the page, the next dwell waits until the pointer has left the tile it landed on (otherwise Back could sit where More was and the pages would flip back and forth). Activating More or Back (clicking, pressing Enter, or hovering for 600 ms **mid-drag only**) cross-fades the ring to that page. A pointer resting on More with no drag in progress never pages by itself.
 - **Engine badge:** a segment whose engine isn't installed shows a small download badge (§7.1).
 
 ### 4.3 Interaction states
@@ -97,12 +97,12 @@ running ──► failed (⚠ for 2 s, notification) ──► closed
 running ──new trigger──► the running job continues in Activity; the pad resets to opening with the new files
 ```
 
-- **Drop on the centre disc:** no-op, and the pad stays open. The same goes for a drop or click in a gap between segments: near-misses do nothing. Only a drop or click outside the ring band closes the pad. While the pointer is in the gap between two segments, the one it just left stays targeted, so the highlight doesn't flicker.
-- **Waiting state:** a pad opened mid-drag with no files yet shows the disc title "Drop files here" and six empty slots, without taking focus, until the files arrive. The shake probe is the same state, but invisible until a file drag enters it (§4.1).
+- **Drop on the centre:** no-op, and the pad stays open. The same goes for a drop or click in a gap between segments: near-misses do nothing. Only a drop or click outside the ring band closes the pad. While the pointer is in the gap between two segments, the one it just left stays targeted, so the highlight doesn't flicker.
+- **Waiting state:** a pad opened mid-drag with no files yet shows the disc title "Drop files here" and no tiles, without taking focus, until the files arrive. The shake probe is the same state, but invisible until a file drag enters it (§4.1).
 - **Dismissal while dragging:** while the pad is open, the core polls `GetCursorPos` at 60 Hz, because Tauri sends no positions after `Leave`. "Leaves the pad by > 80 px for 600 ms" is measured from that poll.
 - **One pad at a time:** a trigger while the pad is open reuses it (see the last transition above).
 
-- **Running:** the segments retract into the disc and the disc's rim becomes a progress ring. It's indeterminate when the engine reports no progress (§6.4). The pad can be dismissed with Esc or by clicking outside it. The job keeps running and appears in Activity.
+- **Running:** the segments retract into the centre and a progress ring appears around it; the status ("40%", "3 of 12 · 40%", "Getting FFmpeg · 85 MB", then Done or the failure) replaces the name, on up to two lines. It's indeterminate when the engine reports no progress (§6.4). The pad can be dismissed with Esc or by clicking outside it. The job keeps running and appears in Activity.
 - **Notifications** for jobs are suppressed whenever the companion window is visible and focused, whichever section (Activity, Library, Settings) is showing: the Activity row already says it. Engine-install failures still notify.
 - **Done:** Windows notification, "holiday.mp3 ready", with a **Show in folder** action. A batch of **3 or more** files sends **one** combined notification when the batch ends ("8 files converted · 1 failed").
 - **Failed:** notification, "Couldn't convert holiday.mov", with a **Details** action that opens Activity at that job.
@@ -125,9 +125,9 @@ Values are at 1× scale and scale with DPI. The source of truth is the mockup's 
 
 | Property | Value |
 |---|---|
-| Pad window | 440 × 440 logical px, centred on the anchor, clamped to the monitor's work area |
-| Ring | centre radius R = 136, thickness 68, 6 segments, **parallel gaps** of 9 px, corner radius 17. All shapes concentric with the disc |
-| Centre disc | radius R − 34 − 14 = 88 |
+| Pad window | 368 × 368 logical px (440 before the owner asked for a compact pad, 2026-11-19), centred on the anchor, clamped to the monitor's work area. Leave-to-dismiss (80 px) is measured from this square, so it fires about 140 px from the tiles |
+| Ring | centre radius R = 94, thickness 60 (inner radius 64: the tiles sit right around the icon), 1 to 6 segments (as many as the page has), **parallel gaps** of 4 px, corner radius 8, the disc 5 px inside the ring (tightened from 9 px, 17 and 14 px at the owner's request, 2026-11-19). All shapes concentric with the disc |
+| Centre | radius R − 30 − 5 = 59 (icon, name, progress ring); the glass disc, when drawn with no tiles, R − 4 = 90. Tile borders: inner light 3 px, rim 0.8 px |
 | Glass fill | the backdrop snapshot (§6.8) clipped to the segment, **magnified 1.10×** about the segment centre (1.15× when targeted), blurred 5 px (6 px over light), saturate 1.6, brightness 1.08 |
 | Rendering strategy (60 fps) | the snapshot is blurred and saturated **once** per open into two pre-processed bitmaps (5 px and 6 px, as `ImageBitmap`). Per frame, only transforms and clip paths change; no CSS `filter` or `backdrop-filter` is animated. The ring is drawn into a single canvas layer (2D or WebGL), not six DOM clones. Budget: ≤ 4 ms per frame on integrated graphics, measured during development |
 | Rim | 1.2 px stroke, diagonal gradient: white 95% (top-left) → 25% → 12% → 60% (bottom-right) |

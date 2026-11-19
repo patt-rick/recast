@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { PresetView } from "../shared/types";
 import { OPEN_MS } from "./anim";
 import { buildFrame, restSprings, stepSprings, type FrameInput } from "./frame";
+import { CX, R } from "./geometry";
 import { paginate } from "./paging";
 
 const p = (id: string, installed = true, warning: string | null = null): PresetView => ({
@@ -9,7 +10,7 @@ const p = (id: string, installed = true, warning: string | null = null): PresetV
   engine_status: installed ? { state: "installed", version: "1", update_available: false } : { state: "not_installed" },
   min_files: 1, engine_size: 1, warning,
 });
-const page = paginate([p("a"), p("b", false), p("c", true, "Big")])[0];
+const page = paginate([p("a"), p("b", false), p("c", true, "Big"), p("d"), p("e"), p("f")])[0];
 const base = (over: Partial<FrameInput> = {}): FrameInput => ({
   now: OPEN_MS, openedAt: 0, page, pageAt: -1000, target: null, focus: null, showFocus: false,
   springs: restSprings(), lum: [0.1, 0.1, 0.9, 0.1, 0.1, 0.1], discLum: 0.1, solid: null,
@@ -25,9 +26,28 @@ describe("buildFrame", () => {
     expect(f.slots[0].symbolColor).toBe("#fff");
     expect(f.slots[2].light).toBe(true);
     expect(f.slots[2].symbolColor).toBe("#1d1d1f");
-    expect(f.slots[3].symbolAlpha).toBe(0); // empty slot
     expect(f.slots[1].badge).toBe("download");
     expect(f.slots[2].badge).toBe("warning");
+  });
+
+  it("draws only the slots a page has", () => {
+    expect(buildFrame(base({ page: page.slice(0, 2), lum: [0.1, 0.1] })).slots).toHaveLength(2);
+    expect(buildFrame(base({ page: [], lum: [] })).slots).toHaveLength(0);
+  });
+
+  it("draws one slot as the whole ring: magnified about the centre, never lifted", () => {
+    const springs = restSprings();
+    springs[0] = { h: 1, off: 9 };
+    const s = buildFrame(base({ page: page.slice(0, 1), lum: [0.1], target: 0, springs })).slots[0];
+    expect([s.ox, s.oy]).toEqual([CX, CX]);
+    expect(s.path.match(/A/g)?.length).toBe(4); // the annulus
+    expect(Math.hypot(s.sx - CX, s.sy - CX)).toBeCloseTo(R, 0); // symbol at 12 o'clock, no lift
+    expect(s.sy).toBeLessThan(CX);
+  });
+
+  it("magnifies wide slots less", () => {
+    const three = buildFrame(base({ page: page.slice(0, 3), lum: [0.1, 0.1, 0.1] })).slots[0];
+    expect(three.mag).toBeCloseTo(1.04);
   });
 
   it("starts the open animation small and unmagnified", () => {
@@ -44,7 +64,7 @@ describe("buildFrame", () => {
     expect(s.tint).toBe("rgba(10,132,255,0.800)");
     expect(s.symbolColor).toBe("#fff");
     expect(s.mag).toBeCloseTo(1.15);
-    expect(Math.hypot(s.sx - 220, s.sy - 220)).toBeCloseTo(136 + 9, 0);
+    expect(Math.hypot(s.sx - CX, s.sy - CX)).toBeCloseTo(R + 9, 0);
   });
 
   it("reduced motion: tint only, no lift or scale", () => {
@@ -53,7 +73,7 @@ describe("buildFrame", () => {
     const s = buildFrame(base({ reducedMotion: true, target: 0, springs })).slots[0];
     expect(s.tint).toBe("rgba(10,132,255,0.450)");
     expect(s.symbolScale).toBe(1);
-    expect(Math.hypot(s.sx - 220, s.sy - 220)).toBeCloseTo(136, 0);
+    expect(Math.hypot(s.sx - CX, s.sy - CX)).toBeCloseTo(R, 0);
   });
 
   it("uses the solid surface when there is no backdrop", () => {
@@ -81,10 +101,10 @@ describe("retract", () => {
   it("moves radius toward the disc and fades, without shrinking or blur changes", () => {
     const rad = (r: number) => {
       const s = buildFrame(base({ retract: r })).slots[0];
-      return { d: Math.hypot(s.sx - 220, s.sy - 220), o: s.opacity, b: s.blurMix, path: s.path };
+      return { d: Math.hypot(s.sx - CX, s.sy - CX), o: s.opacity, b: s.blurMix, path: s.path };
     };
     const a = rad(0), b = rad(0.4), c = rad(0.7);
-    expect(a.d).toBeCloseTo(136);
+    expect(a.d).toBeCloseTo(R);
     expect(b.d).toBeLessThan(a.d);
     expect(c.d).toBeLessThan(b.d);
     expect(b.o).toBeCloseTo(0.6);

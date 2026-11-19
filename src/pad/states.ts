@@ -29,6 +29,13 @@ export interface PadState {
   focus: number | null;
   /** Pointer resting on More/Back since. */
   dwell: { slot: number; at: number } | null;
+  /**
+   * After a dwell turned the page, no dwell until the pointer leaves the slot it is over (`slot`,
+   * learnt from the first pointer event; null until then). Pages hold different numbers
+   * of slots, so the pointer that dwelt on More can land on the next page's Back and
+   * would otherwise turn back, and forth, for as long as it stays.
+   */
+  dwellHold: { slot: number | null } | null;
   /** Pointer more than LEAVE_PX outside the pad since (drag mode). */
   outsideSince: number | null;
   /** The last input was a key: draw the focus outline. */
@@ -59,6 +66,7 @@ export const closed: PadState = {
   pageAt: 0,
   focus: null,
   dwell: null,
+  dwellHold: null,
   outsideSince: null,
   keyboard: false,
   reducedMotion: false,
@@ -75,7 +83,7 @@ export const target = (s: PadState): number | null => (s.phase.name === "targeti
 
 function turnPage(s: PadState, page: number, at: number): PadState {
   const p = Math.max(0, Math.min(s.pages.length - 1, page));
-  return { ...s, page: p, pageAt: at, focus: firstPreset(s.pages[p] ?? []), dwell: null, phase: { name: "idle" } };
+  return { ...s, page: p, pageAt: at, focus: firstPreset(s.pages[p] ?? []), dwell: null, dwellHold: null, phase: { name: "idle" } };
 }
 
 function activate(s: PadState, i: number | null, at: number): PadState {
@@ -114,20 +122,27 @@ export function reduce(s: PadState, e: PadEvent): PadState {
       if (p.name === "failed" && e.at - p.at >= FAILED_MS) return shut(s);
       if (!interactive(p)) return s;
       if (s.outsideSince != null && e.at - s.outsideSince >= LEAVE_MS) return shut(s);
-      if (s.dwell && e.at - s.dwell.at >= DWELL_MS) return activate({ ...s, dwell: null }, s.dwell.slot, e.at);
+      if (s.dwell && e.at - s.dwell.at >= DWELL_MS) {
+        const next = activate({ ...s, dwell: null }, s.dwell.slot, e.at);
+        // A dwell turned the page: hold further dwells until the pointer moves on.
+        return next.page !== s.page ? { ...next, dwellHold: { slot: null } } : next;
+      }
       if (p.name === "opening" && e.at - p.at >= OPEN_MS) return { ...s, phase: { name: "idle" } };
       return s;
     }
     case "pointer": {
       if (!interactive(s.phase)) return s;
       const slot = e.hit.kind === "slot" && isActive(currentPage(s)[e.hit.slot]) ? e.hit.slot : null;
+      let hold = s.dwellHold;
+      if (hold && (slot == null || (hold.slot != null && hold.slot !== slot))) hold = null;
+      else if (hold && hold.slot == null) hold = { slot };
       if (slot == null) {
-        return { ...s, dwell: null, phase: s.phase.name === "targeting" ? { name: "idle" } : s.phase };
+        return { ...s, dwell: null, dwellHold: hold, phase: s.phase.name === "targeting" ? { name: "idle" } : s.phase };
       }
       const kind = currentPage(s)[slot].kind;
       const pages = kind === "more" || kind === "back";
-      const dwell = pages && e.dwell ? (s.dwell?.slot === slot ? s.dwell : { slot, at: e.at }) : null;
-      return { ...s, dwell, focus: slot, keyboard: false, phase: { name: "targeting", slot } };
+      const dwell = pages && e.dwell && !hold ? (s.dwell?.slot === slot ? s.dwell : { slot, at: e.at }) : null;
+      return { ...s, dwell, dwellHold: hold, focus: slot, keyboard: false, phase: { name: "targeting", slot } };
     }
     case "outside":
       if (!interactive(s.phase)) return s;

@@ -5,7 +5,8 @@ import type { PadModel } from "../shared/types";
 import { buildFrame, restSprings, springsSettled, stepRetract, stepSprings, type Spring } from "./frame";
 import { OPEN_MS, PAGE_FADE_MS } from "./anim";
 import { SIZE } from "./geometry";
-import { clampPillX, pillAnchor } from "./pill";
+import { clampPillX, pillAnchor, pillTop } from "./pill";
+import { iconPath, kindIcon } from "./icons";
 import { hitTest } from "./hitTest";
 import { discText } from "./disc";
 import { label } from "./progress";
@@ -26,7 +27,7 @@ export interface RingProps {
   external: { x: number; y: number } | null;
   /** Listen for keys on the window (the pad window, or the inline overlay while open). */
   keys: boolean;
-  /** Drag-mode pad still waiting for files: "Drop files here", every slot empty. */
+  /** Drag-mode pad still waiting for files: "Drop files here", no tiles. */
   waiting?: boolean;
   /** Called once, after the first frame has been drawn (the pad window is shown then). */
   onFirstFrame?: () => void;
@@ -42,14 +43,17 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, waiti
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
   const pillEl = useRef<HTMLDivElement>(null);
   const [pillW, setPillW] = useState(0);
+  const [pillH, setPillH] = useState(0);
   const { state, dispatch, batch, running, openedAt } = pad;
   const tgt = target(state);
   const page = currentPage(state);
+  /** Tiles on show: only the slots the page has (spec §4.2). */
+  const n = page.length;
 
-  // Luminance once per backdrop.
+  // Luminance once per backdrop and slot count (n changes only with the page).
   const lum = useMemo(
-    () => (glass ? { slots: allSlotLuminance(glass.pixels, glass.scale), disc: discLuminance(glass.pixels, glass.scale) } : null),
-    [glass],
+    () => (glass ? { slots: allSlotLuminance(glass.pixels, glass.scale, n), disc: discLuminance(glass.pixels, glass.scale) } : null),
+    [glass, n],
   );
 
   // Pointer → hit test (mouse here, or an external drag position).
@@ -60,13 +64,13 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, waiti
     // dwell only for drag-sourced positions (spec §4.2): `external != null`.
     dispatch({
       type: "pointer",
-      hit: pos ? hitTest(pos.x, pos.y, tgtRef.current) : { kind: "none" },
+      hit: pos ? hitTest(pos.x, pos.y, tgtRef.current, n) : { kind: "none" },
       at: performance.now(),
       dwell: external != null,
     });
-    // `external` only changes together with `pos`.
+    // `external` only changes together with `pos`; a new page (n) re-tests the same point.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pos?.x, pos?.y, dispatch]);
+  }, [pos?.x, pos?.y, n, dispatch]);
 
   useEffect(() => {
     if (!keys) return;
@@ -128,10 +132,7 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, waiti
           solid: L.glass ? null : L.solid, reducedMotion: s.reducedMotion, pointer: L.pos, retract,
           progress: busy ? { pct: L.batch.pct, spin: s.reducedMotion ? 0 : (now / 1000) * Math.PI * 1.6 } : null,
         });
-        // fallbackKind must be null unless the phase is opening/idle/targeting (the kind glyph would overlap the DOM ✓/⚠).
-        const glyphPhase = ["opening", "idle", "targeting"].includes(s.phase.name);
-        const kind = L.thumbUrl || L.waiting || !glyphPhase ? null : (L.model.files[0]?.kind ?? null);
-        probe(() => draw(ctx, frame, L.glass, dpr, kind));
+        probe(() => draw(ctx, frame, L.glass, dpr));
         if (!drawn) {
           drawn = true;
           L.onFirstFrame?.();
@@ -164,6 +165,8 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, waiti
   };
 
   const text = discText(model, waiting);
+  // The kind glyph shows only while choosing (opening/idle/targeting), without a thumbnail.
+  const kind = !thumbUrl && !waiting && ["opening", "idle", "targeting"].includes(state.phase.name) ? (model.files[0]?.kind ?? null) : null;
   const busyNow = ["starting", "running"].includes(state.phase.name);
   const light = lum ? lum.disc > 0.6 : solid === "light";
   const tslot = tgt != null ? page[tgt] : null;
@@ -175,13 +178,16 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, waiti
           tslot.preset.warning,
         ].filter(Boolean) as string[]
       : tslot?.kind === "more" ? ["More conversions"] : tslot?.kind === "back" ? ["Back"] : null;
-  const anchor = pillAnchor(tgt ?? 0);
+  const anchor = pillAnchor(tgt ?? 0, n);
   const pillKey = pill ? pill.join("|") : "";
   useLayoutEffect(() => {
-    if (pillEl.current) setPillW(pillEl.current.offsetWidth);
+    if (pillEl.current) {
+      setPillW(pillEl.current.offsetWidth);
+      setPillH(pillEl.current.offsetHeight);
+    }
   }, [pillKey, tgt, busyNow]);
   const pillX = clampPillX(anchor.x, pillW);
-  const pillY = anchor.y;
+  const pillY = pillTop(anchor, pillH);
   const status =
     state.phase.name === "done" ? "Done"
       : state.phase.name === "failed" ? state.phase.message
@@ -195,40 +201,50 @@ export function Ring({ pad, model, thumbUrl, glass, solid, external, keys, waiti
       onMouseLeave={() => setPointer(null)}
       onClick={(e) => {
         const p = local(e);
-        dispatch({ type: "drop", hit: hitTest(p.x, p.y, tgt), at: performance.now() });
+        dispatch({ type: "drop", hit: hitTest(p.x, p.y, tgt, n), at: performance.now() });
       }}
     >
       <canvas ref={canvas} className="ring-canvas" aria-hidden="true" />
-      <div className="disc" aria-live="polite">
+      <div className={n === 0 ? "disc wide" : "disc"} aria-live="polite">
         {state.phase.name === "done" ? (
           <div className="disc-glyph ok" aria-hidden="true">✓</div>
         ) : state.phase.name === "failed" ? (
           <div className="disc-glyph bad" aria-hidden="true">⚠</div>
         ) : thumbUrl ? (
-          <div className={model.files.length > 1 ? "thumb stacked" : "thumb"}>
+          <div className="thumb">
             <img src={thumbUrl} alt="" />
           </div>
+        ) : kind ? (
+          // The file kind's glyph, bare, in the same stack as the name (so a note can't run into it).
+          <svg className="kind-glyph" viewBox="0 0 24 24" aria-hidden="true">
+            <path d={iconPath(kindIcon(kind))} />
+          </svg>
         ) : (
           <div className="thumb-space" />
         )}
-        <div className="disc-title">{text.title}</div>
-        <div className="disc-meta">{status ?? text.note ?? text.meta}</div>
+        {status ? (
+          <div className="disc-status">{status}</div>
+        ) : (
+          <>
+            <div className="disc-title">{text.title}</div>
+            {text.skipped && <div className="disc-note">{text.skipped}</div>}
+            {text.note && <div className="disc-note">{text.note}</div>}
+          </>
+        )}
       </div>
       {pill && !busyNow && (
-        <div ref={pillEl} className="pill" style={{ left: pillX, top: pillY }} role="tooltip">
+        <div ref={pillEl} className="pill" style={{ left: pillX, top: pillY, transform: "translate(-50%, 0)" }} role="tooltip">
           {pill.map((l) => (
             <div key={l}>{l}</div>
           ))}
         </div>
       )}
       <ul className="sr-only" role="listbox" aria-label="Conversions">
-        {page.map((s, i) =>
-          s.kind === "empty" ? null : (
-            <li key={i} role="option" aria-selected={state.focus === i}>
-              {s.kind === "preset" ? s.preset.description : s.kind === "more" ? "More conversions" : "Back"}
-            </li>
-          ),
-        )}
+        {page.map((s, i) => (
+          <li key={i} role="option" aria-selected={state.focus === i}>
+            {s.kind === "preset" ? s.preset.description : s.kind === "more" ? "More conversions" : "Back"}
+          </li>
+        ))}
       </ul>
     </div>
   );

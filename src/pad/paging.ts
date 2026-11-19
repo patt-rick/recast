@@ -1,19 +1,22 @@
 import type { PresetView } from "../shared/types";
-import { N } from "./geometry";
+import { MAX_SLOTS } from "./geometry";
 
-export type Slot = { kind: "preset"; preset: PresetView } | { kind: "more" } | { kind: "back" } | { kind: "empty" };
+export type Slot = { kind: "preset"; preset: PresetView } | { kind: "more" } | { kind: "back" };
 
-const fill = (slots: Slot[]): Slot[] => [...slots, ...Array.from({ length: N - slots.length }, (): Slot => ({ kind: "empty" }))];
+const N = MAX_SLOTS;
 const preset = (p: PresetView): Slot => ({ kind: "preset", preset: p });
 
-/** Presets → pages of exactly six slots (spec §4.2, deviation 7). */
+/**
+ * Presets → pages of at most six slots, each holding only real slots: the ring shows as
+ * many tiles as the page has (spec §4.2). No presets → one page with no slots.
+ */
 export function paginate(presets: PresetView[]): Slot[][] {
-  if (presets.length <= N) return [fill(presets.map(preset))];
+  if (presets.length <= N) return [presets.map(preset)];
   const pages: Slot[][] = [[...presets.slice(0, N - 1).map(preset), { kind: "more" }]];
   let rest = presets.slice(N - 1);
   while (rest.length > 0) {
     if (rest.length <= N - 1) {
-      pages.push(fill([{ kind: "back" }, ...rest.map(preset)]));
+      pages.push([{ kind: "back" }, ...rest.map(preset)]);
       rest = [];
     } else {
       pages.push([{ kind: "back" }, ...rest.slice(0, N - 2).map(preset), { kind: "more" }]);
@@ -23,7 +26,7 @@ export function paginate(presets: PresetView[]): Slot[][] {
   return pages;
 }
 
-export const isActive = (s: Slot | undefined) => s != null && s.kind !== "empty";
+export const isActive = (s: Slot | undefined) => s != null;
 
 export function firstActive(page: Slot[]): number | null {
   const i = page.findIndex(isActive);
@@ -44,8 +47,9 @@ export function firstPreset(page: Slot[]): number | null {
 /** Next targetable slot clockwise (dir 1) or anticlockwise (−1), wrapping. */
 export function nextActive(page: Slot[], from: number | null, dir: 1 | -1): number | null {
   if (from == null) return dir === 1 ? firstActive(page) : lastActive(page);
-  for (let k = 1; k <= N; k++) {
-    const i = (((from + dir * k) % N) + N) % N;
+  const n = page.length;
+  for (let k = 1; k <= n; k++) {
+    const i = (((from + dir * k) % n) + n) % n;
     if (isActive(page[i])) return i;
   }
   return null;

@@ -51,7 +51,8 @@ impl Edge {
 
 pub const HANDLE_LONG: f64 = 80.0;
 pub const HANDLE_SHORT: f64 = 6.0;
-pub const PAD_GAP: f64 = 12.0;
+/// Handle to pad window. The ring sits 60 px inside the pad window (368 px, R1 124).
+pub const PAD_GAP: f64 = 2.0;
 pub const DESK_SIZE: f64 = 96.0;
 pub const DESK_MARGIN: f64 = 24.0;
 
@@ -258,17 +259,17 @@ mod tests {
 
     #[test]
     fn the_pad_anchors_beside_the_tab_not_the_grown_window() {
-        // Left tab at y 480..560, 6 wide; pad 440: centre 6 + 12 + 220 = 238.
+        // Left tab at y 480..560, 6 wide; pad 440: centre 6 + 2 + 220 = 228.
         let tab = handle_pad_anchor(Edge::Left, 0.5, WORK, 1.0, 0, 440);
-        assert_eq!(tab, (238, 520));
-        // The grown window is 180 wide; anchoring on it would put the centre at 412.
+        assert_eq!(tab, (228, 520));
+        // The grown window is 180 wide; anchoring on it would put the centre at 402.
         let grown = handle_window(Edge::Left, 0.5, WORK, 1.0, true, 0);
-        assert_eq!(pad_anchor_beside(Edge::Left, grown, 440, 1.0).0, 412);
+        assert_eq!(pad_anchor_beside(Edge::Left, grown, 440, 1.0).0, 402);
         assert_eq!(
             handle_pad_anchor(Edge::Right, 0.5, WORK, 1.0, 0, 440).0,
-            1920 - 6 - 12 - 220
+            1920 - 6 - 2 - 220
         );
-        assert_eq!(handle_pad_anchor(Edge::Left, 0.5, WORK, 1.0, 2, 440).0, 240);
+        assert_eq!(handle_pad_anchor(Edge::Left, 0.5, WORK, 1.0, 2, 440).0, 230);
     }
 
     #[test]
@@ -323,17 +324,17 @@ mod tests {
         let h = handle_rect(Edge::Left, 0.5, WORK, 1.0);
         assert_eq!(
             pad_anchor_beside(Edge::Left, h, 440, 1.0),
-            (6 + 12 + 220, 520)
+            (6 + 2 + 220, 520)
         );
         let h = handle_rect(Edge::Right, 0.5, WORK, 2.0);
         assert_eq!(
             pad_anchor_beside(Edge::Right, h, 880, 2.0),
-            (h.x - 24 - 440, h.y + h.h / 2)
+            (h.x - 4 - 440, h.y + h.h / 2)
         );
         let h = handle_rect(Edge::Bottom, 0.5, WORK, 1.0);
         assert_eq!(
             pad_anchor_beside(Edge::Bottom, h, 440, 1.0),
-            (960, h.y - 12 - 220)
+            (960, h.y - 2 - 220)
         );
     }
 

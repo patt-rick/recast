@@ -1,5 +1,5 @@
 /** Per-slot backdrop luminance for light/dark adaptation (spec §4.4, deviation 4). */
-import { CX, CY, DISC_R, GAP, N, R, R1, STEP, TH, inSector, slotAngle } from "./geometry";
+import { CX, CY, DISC_R, GAP, R, R1, TH, inSector, slotAngle, step } from "./geometry";
 
 export interface Pixels {
   data: Uint8ClampedArray<ArrayBuffer>;
@@ -28,12 +28,14 @@ function mean(px: Pixels, scale: number, inside: (x: number, y: number) => boole
   return n ? sum / n : 0;
 }
 
-/** Mean luma (0..1) of the backdrop under slot i at rest. `scale`: physical px per logical px. */
-export const slotLuminance = (px: Pixels, scale: number, i: number) =>
-  mean(px, scale, (x, y) => inSector(x, y, CX, CY, R, TH, slotAngle(i), STEP / 2, GAP), R1);
+/** Mean luma (0..1) of the backdrop under slot i of n at rest. `scale`: physical px per logical px. */
+export const slotLuminance = (px: Pixels, scale: number, i: number, n: number) =>
+  mean(px, scale, (x, y) => inSector(x, y, CX, CY, R, TH, slotAngle(i, n), step(n) / 2, n === 1 ? 0 : GAP), R1);
 
+/** Mean luma under the centre's icon and name (a box, not the whole circle: that is what the text sits on). */
 export const discLuminance = (px: Pixels, scale: number) =>
-  mean(px, scale, (x, y) => Math.hypot(x - CX, y - CY) <= DISC_R, DISC_R);
+  mean(px, scale, (x, y) => Math.abs(x - CX) <= 50 && y >= CY - 32 && y <= CY + 34, DISC_R);
 
-export const allSlotLuminance = (px: Pixels, scale: number) =>
-  Array.from({ length: N }, (_, i) => slotLuminance(px, scale, i));
+/** Luminance of every slot of a page of n slots. */
+export const allSlotLuminance = (px: Pixels, scale: number, n: number) =>
+  Array.from({ length: n }, (_, i) => slotLuminance(px, scale, i, n));

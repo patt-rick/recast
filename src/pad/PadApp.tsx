@@ -11,6 +11,7 @@ import { planDrop, type PendingDrop } from "./dropPlan";
 import { enterAction } from "./enter";
 import { hitTest } from "./hitTest";
 import { withOpenInRecast } from "./openInRecast";
+import { paginate } from "./paging";
 import { Ring } from "./Ring";
 import { target } from "./states";
 import { usePad } from "./usePad";
@@ -22,7 +23,7 @@ interface Session {
   mode: PadMode;
   model: PadModel;
   glass: GlassSource | null;
-  /** Drag-mode pad opened with no files yet: "Drop files here", every slot empty. */
+  /** Drag-mode pad opened with no files yet: "Drop files here", no tiles. */
   waiting: boolean;
   /** A shake probe: invisible until a file drag enters it (Rust confirms it, B1). */
   probe: boolean;
@@ -165,9 +166,19 @@ export function PadApp() {
     };
   }, [begin]);
 
+  // How many slots the ring shows for this session. Worked out from the session's own
+  // model: an early drop runs right after `open`, before the reducer's state has caught up.
+  const slotsShown = (s: Session) => {
+    const pages = paginate(s.model.presets);
+    const st = padRef.current.state;
+    const ids = (ps: typeof pages) => ps.map((p) => p.map((x) => (x.kind === "preset" ? x.preset.id : x.kind)).join(",")).join("|");
+    const ours = s === sessionRef.current && st.phase.name !== "closed" && ids(st.pages) === ids(pages);
+    return pages[ours ? st.page : 0]?.length ?? 0;
+  };
+
   dropRef.current = (s, x, y, paths) => {
     ipc.padTrackCursor(false, s.generation).catch(() => {});
-    const hit = hitTest(x, y, s === sessionRef.current ? target(padRef.current.state) : null);
+    const hit = hitTest(x, y, s === sessionRef.current ? target(padRef.current.state) : null, slotsShown(s));
     const plan = planDrop(s, paths, hit);
     if (plan === "run-and-keep" || plan === "run-and-close") {
       padRef.current.dispatch({ type: "drop", hit, at: performance.now() });

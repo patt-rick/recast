@@ -24,12 +24,12 @@ describe("luminance", () => {
     for (const scale of [1, 1.5, 2]) {
       const leftWhite = image(scale, (x) => (x < SIZE / 2 ? 255 : 0));
       // Slots 4 and 5 are on the left (8 and 10 o'clock); 1 and 2 on the right.
-      expect(isLight(slotLuminance(leftWhite, scale, 4))).toBe(true);
-      expect(isLight(slotLuminance(leftWhite, scale, 5))).toBe(true);
-      expect(isLight(slotLuminance(leftWhite, scale, 1))).toBe(false);
-      expect(isLight(slotLuminance(leftWhite, scale, 2))).toBe(false);
+      expect(isLight(slotLuminance(leftWhite, scale, 4, 6))).toBe(true);
+      expect(isLight(slotLuminance(leftWhite, scale, 5, 6))).toBe(true);
+      expect(isLight(slotLuminance(leftWhite, scale, 1, 6))).toBe(false);
+      expect(isLight(slotLuminance(leftWhite, scale, 2, 6))).toBe(false);
     }
-    expect(slotLuminance(image(1, () => 255), 1, 0)).toBeCloseTo(1);
+    expect(slotLuminance(image(1, () => 255), 1, 0, 6)).toBeCloseTo(1);
     expect(discLuminance(image(1, () => 0), 1)).toBe(0);
   });
 

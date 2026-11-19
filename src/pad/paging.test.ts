@@ -11,16 +11,17 @@ const kinds = (page: ReturnType<typeof paginate>[number]) =>
 const many = (n: number) => Array.from({ length: n }, (_, i) => p(`p${i + 1}`));
 
 describe("paginate", () => {
-  it("always gives pages of six slots", () => {
-    expect(kinds(paginate([])[0])).toEqual(["empty", "empty", "empty", "empty", "empty", "empty"]);
-    expect(kinds(paginate(many(3))[0])).toEqual(["p1", "p2", "p3", "empty", "empty", "empty"]);
+  it("gives pages of only the slots there are, six at most", () => {
+    expect(paginate([])).toEqual([[]]);
+    expect(kinds(paginate(many(1))[0])).toEqual(["p1"]);
+    expect(kinds(paginate(many(3))[0])).toEqual(["p1", "p2", "p3"]);
     expect(paginate(many(6)).map(kinds)).toEqual([["p1", "p2", "p3", "p4", "p5", "p6"]]);
   });
 
   it("puts More in slot 6 and Back in slot 1 when there are more than six", () => {
     expect(paginate(many(7)).map(kinds)).toEqual([
       ["p1", "p2", "p3", "p4", "p5", "more"],
-      ["back", "p6", "p7", "empty", "empty", "empty"],
+      ["back", "p6", "p7"],
     ]);
     expect(paginate(many(10)).map(kinds)).toEqual([
       ["p1", "p2", "p3", "p4", "p5", "more"],
@@ -29,14 +30,14 @@ describe("paginate", () => {
     expect(paginate(many(11)).map(kinds)).toEqual([
       ["p1", "p2", "p3", "p4", "p5", "more"],
       ["back", "p6", "p7", "p8", "p9", "more"],
-      ["back", "p10", "p11", "empty", "empty", "empty"],
+      ["back", "p10", "p11"],
     ]);
   });
 });
 
 describe("keyboard order", () => {
   const page = paginate(many(3))[0];
-  it("skips empty slots and wraps", () => {
+  it("wraps within the slots the page has", () => {
     expect(firstActive(page)).toBe(0);
     expect(nextActive(page, 2, 1)).toBe(0);
     expect(nextActive(page, 0, -1)).toBe(2);

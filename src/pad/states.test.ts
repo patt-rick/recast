@@ -40,6 +40,32 @@ describe("pad states (§4.3)", () => {
     expect(run([open(), { type: "pointer", hit: slot(2), at: 5, dwell: false }, { type: "pointer", hit: { kind: "gap" }, at: 6, dwell: false }]).phase.name).toBe("idle");
   });
 
+  it("after a page turn, dwells only once the pointer has moved off the slot it landed on", () => {
+    // 7 presets: page 2 is Back + 1, so Back's half ring covers where More was on page 1.
+    const seven = paginate(Array.from({ length: 7 }, (_, i) => p(`p${i + 1}`)));
+    const opened = run([{ type: "open", pages: seven, at: 0, reducedMotion: true }]);
+    const turned = run([
+      { type: "pointer", hit: slot(5), at: 100, dwell: true },
+      { type: "tick", at: 100 + DWELL_MS },
+    ], opened);
+    expect(turned.page).toBe(1);
+    // The same pointer is now over Back (slot 0): no dwell, however long it stays.
+    const resting = run([
+      { type: "pointer", hit: slot(0), at: 800, dwell: true },
+      { type: "pointer", hit: slot(0), at: 900, dwell: true },
+      { type: "tick", at: 5000 },
+    ], turned);
+    expect(resting.page).toBe(1);
+    expect(resting.dwell).toBeNull();
+    // Off it and back on: the dwell works again.
+    const again = run([
+      { type: "pointer", hit: slot(1), at: 5100, dwell: true },
+      { type: "pointer", hit: slot(0), at: 5200, dwell: true },
+      { type: "tick", at: 5200 + DWELL_MS },
+    ], resting);
+    expect(again.page).toBe(0);
+  });
+
   it("dwell arms only for drag-sourced pointers", () => {
     const hover = run([open(), { type: "pointer", hit: slot(5), at: 100, dwell: false }]);
     expect(hover.dwell).toBeNull();

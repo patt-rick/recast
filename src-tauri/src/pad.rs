@@ -12,7 +12,7 @@ use crate::lockutil::lock;
 use crate::platform;
 
 pub const LABEL: &str = "pad";
-pub const SIZE: f64 = 440.0;
+pub const SIZE: f64 = 368.0;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

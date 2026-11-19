@@ -74,8 +74,8 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: 
 .field input[type="number"], .field input[type="text"], .field select { font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: inherit; max-width: 320px; }
 
 .ring-overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.28); z-index: 10; overflow: hidden; }
-.ring-fit { width: 440px; height: 440px; transform-origin: center; }
-@media (prefers-color-scheme: light) { .ring-overlay .ring { color: #1d1d1f; } .ring-overlay .ring .disc { text-shadow: none; } }
+.ring-fit { width: 368px; height: 368px; transform-origin: center; }
+@media (prefers-color-scheme: light) { .ring-overlay .ring { color: #1d1d1f; } .ring-overlay .ring .disc { text-shadow: 0 0 2px rgba(255,255,255,.85), 0 0 8px rgba(255,255,255,.6); } }
 
 .segmented { display: flex; gap: 4px; margin-bottom: 8px; }
 .tools .dropzone { padding: 16px; }

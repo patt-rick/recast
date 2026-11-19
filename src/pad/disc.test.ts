@@ -21,9 +21,8 @@ describe("disc text (§4.2)", () => {
     expect(formatDuration(3725)).toBe("1:02:05");
   });
 
-  it("names one file with kind, size and length or pages", () => {
-    expect(discText(model([file()]))).toEqual({ title: "holiday.mov", meta: "MOV · 1.2 GB · 2:14", note: null });
-    expect(discText(model([file({ name: "a.pdf", kind: "pdf", format: "pdf", size: 2048, duration_s: null, pages: 3 })])).meta).toBe("PDF · 2.0 KB · 3 pages");
+  it("names one file, and nothing else", () => {
+    expect(discText(model([file()]))).toEqual({ title: "holiday.mov", skipped: null, note: null });
   });
 
   it("counts several files", () => {
@@ -36,16 +35,17 @@ describe("disc text (§4.2)", () => {
     expect(discText(model([file()], 0)).note).toBe("Recast has no conversions for this file.");
   });
 
-  it("mentions files that couldn't be read", () => {
-    expect(discText(model([file(), file({ size: 10 })], 1, false, 1)).meta).toBe("1.2 GB in total · 1 skipped");
-    expect(discText(model([file()], 1, false, 2)).meta).toBe("MOV · 1.2 GB · 2:14 · 2 skipped");
-    // Everything failed: the empty-model note stays, with the count beside it.
+  it("mentions files that couldn't be read, on their own line", () => {
+    expect(discText(model([file(), file({ size: 10 })], 1, false, 1))).toMatchObject({ title: "2 files", skipped: "1 skipped" });
+    expect(discText(model([file()], 1, false, 2))).toMatchObject({ title: "holiday.mov", skipped: "2 skipped" });
+    // Everything failed: the empty-model note stays, with the count.
     const none = discText(model([], 0, false, 3));
-    expect(none.meta).toBe("3 skipped");
+    expect(none).toMatchObject({ title: "Nothing to convert", skipped: "3 skipped" });
     expect(none.note).toBe("Folders aren't supported yet. Drop the files inside instead.");
+    expect(discText(model([], 0)).title).toBe("Nothing to convert");
   });
 
   it("invites a drop while waiting for files", () => {
-    expect(discText(model([], 0), true)).toEqual({ title: "Drop files here", meta: "", note: null });
+    expect(discText(model([], 0), true)).toEqual({ title: "Drop files here", skipped: null, note: null });
   });
 });

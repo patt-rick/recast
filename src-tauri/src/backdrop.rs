@@ -2,7 +2,7 @@
 //! Wire format sent to the pad webview: u32 LE width, u32 LE height, then RGBA rows top-down.
 
 pub const HEADER: usize = 8;
-/// Larger captures are refused (a 440 px pad at 400% DPI is 1760 px).
+/// Larger captures are refused (a 368 px pad at 400% DPI is 1472 px).
 pub const MAX_SIDE: u32 = 4096;
 
 /// BGRA (GDI order, alpha undefined) → the wire format, alpha forced opaque.
