@@ -5,7 +5,9 @@ use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::process::Child;
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, STILL_ACTIVE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_FILE_NOT_FOUND, HANDLE, HWND, STILL_ACTIVE, WAIT_OBJECT_0, WIN32_ERROR,
+};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, GetDIBits, ReleaseDC, SRCCOPY, SelectObject,
@@ -22,7 +24,10 @@ use windows::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject, TerminateJobObject,
 };
-use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+use windows::Win32::System::Registry::{
+    HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegDeleteTreeW,
+    RegGetValueW, RegSetKeyValueW,
+};
 use windows::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
     PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
@@ -30,7 +35,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::{
     SW_HIDE, SW_SHOWNOACTIVATE, SetWindowDisplayAffinity, ShowWindow, WDA_EXCLUDEFROMCAPTURE,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::PCWSTR;
 
 /// `CREATE_NO_WINDOW`: engine consoles never flash on screen.
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -405,20 +410,121 @@ pub fn hide_window(hwnd: isize) {
 
 /// Windows "Transparency effects" (Settings → Personalisation → Colours). Missing value = on.
 pub fn transparency_enabled() -> bool {
-    let mut value = 1u32;
+    hkcu_dword(PERSONALIZE, "EnableTransparency") != Some(0)
+}
+
+fn wstr(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+fn reg_result(e: WIN32_ERROR) -> io::Result<()> {
+    if e.is_ok() {
+        Ok(())
+    } else {
+        Err(io::Error::from_raw_os_error(e.0 as i32))
+    }
+}
+
+/// Write a REG_SZ value under HKCU, creating the key. `name` None is the key's default value.
+pub fn hkcu_set_string(key: &str, name: Option<&str>, data: &str) -> io::Result<()> {
+    let (k, n, d) = (wstr(key), name.map(wstr), wstr(data));
+    let n = n.as_ref().map_or(PCWSTR::null(), |n| PCWSTR(n.as_ptr()));
+    let r = unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(k.as_ptr()),
+            n,
+            REG_SZ.0,
+            Some(d.as_ptr() as *const c_void),
+            (d.len() * 2) as u32,
+        )
+    };
+    reg_result(r)
+}
+
+/// A REG_SZ value under HKCU, or None if the key or value is missing.
+pub fn hkcu_get_string(key: &str, name: Option<&str>) -> Option<String> {
+    let (k, n) = (wstr(key), name.map(wstr));
+    let n = n.as_ref().map_or(PCWSTR::null(), |n| PCWSTR(n.as_ptr()));
+    let mut size = 0u32;
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(k.as_ptr()),
+            n,
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&mut size),
+        )
+    };
+    if r.is_err() || size == 0 {
+        return None;
+    }
+    let mut buf = vec![0u16; (size as usize).div_ceil(2)];
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(k.as_ptr()),
+            n,
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr() as *mut c_void),
+            Some(&mut size),
+        )
+    };
+    if r.is_err() {
+        return None;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    Some(String::from_utf16_lossy(&buf[..len]))
+}
+
+/// Delete an HKCU key with everything under it. A missing key is not an error.
+pub fn hkcu_delete_tree(key: &str) -> io::Result<()> {
+    let k = wstr(key);
+    let r = unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, PCWSTR(k.as_ptr())) };
+    if r == ERROR_FILE_NOT_FOUND {
+        return Ok(());
+    }
+    reg_result(r)
+}
+
+/// Delete one HKCU value. A missing key or value is not an error.
+pub fn hkcu_delete_value(key: &str, name: &str) -> io::Result<()> {
+    let (k, n) = (wstr(key), wstr(name));
+    let r =
+        unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, PCWSTR(k.as_ptr()), PCWSTR(n.as_ptr())) };
+    if r == ERROR_FILE_NOT_FOUND {
+        return Ok(());
+    }
+    reg_result(r)
+}
+
+/// A REG_DWORD value under HKCU, or None if missing.
+pub fn hkcu_dword(key: &str, name: &str) -> Option<u32> {
+    let (k, n) = (wstr(key), wstr(name));
+    let mut value = 0u32;
     let mut size = std::mem::size_of::<u32>() as u32;
     let r = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
-            w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
-            w!("EnableTransparency"),
+            PCWSTR(k.as_ptr()),
+            PCWSTR(n.as_ptr()),
             RRF_RT_REG_DWORD,
             None,
             Some(&mut value as *mut u32 as *mut c_void),
-            Some(&mut size as *mut u32),
+            Some(&mut size),
         )
     };
-    !r.is_ok() || value != 0
+    r.is_ok().then_some(value)
+}
+
+const PERSONALIZE: &str = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
+
+/// The taskbar (and tray) uses the light theme. A missing value means dark, as Windows 10 defaults.
+pub fn taskbar_is_light() -> bool {
+    hkcu_dword(PERSONALIZE, "SystemUsesLightTheme") == Some(1)
 }
 
 #[cfg(test)]
@@ -595,6 +701,46 @@ mod tests {
 
     #[test]
     fn transparency_setting_reads_without_panicking() {
+        let _ = transparency_enabled();
+    }
+
+    fn scratch_key() -> String {
+        format!(r"Software\RecastTest-{}", uuid::Uuid::new_v4())
+    }
+
+    #[test]
+    fn registry_strings_round_trip_and_trees_delete() {
+        let key = scratch_key();
+        let sub = format!(r"{key}\command");
+        hkcu_set_string(&key, None, "Open with Recast").unwrap();
+        hkcu_set_string(&key, Some("MultiSelectModel"), "Player").unwrap();
+        hkcu_set_string(&sub, None, r#""C:\x\recast.exe" --pad "%1""#).unwrap();
+        assert_eq!(
+            hkcu_get_string(&key, None).as_deref(),
+            Some("Open with Recast")
+        );
+        assert_eq!(
+            hkcu_get_string(&key, Some("MultiSelectModel")).as_deref(),
+            Some("Player")
+        );
+        assert_eq!(
+            hkcu_get_string(&sub, None).as_deref(),
+            Some(r#""C:\x\recast.exe" --pad "%1""#)
+        );
+        hkcu_delete_value(&key, "MultiSelectModel").unwrap();
+        assert_eq!(hkcu_get_string(&key, Some("MultiSelectModel")), None);
+        hkcu_delete_value(&key, "MultiSelectModel").unwrap(); // missing is fine
+        hkcu_delete_tree(&key).unwrap();
+        assert_eq!(hkcu_get_string(&key, None), None);
+        assert_eq!(hkcu_get_string(&sub, None), None);
+        hkcu_delete_tree(&key).unwrap(); // missing is fine
+    }
+
+    #[test]
+    fn dword_reads_and_theme_reads_without_panicking() {
+        let key = scratch_key();
+        assert_eq!(hkcu_dword(&key, "Nope"), None);
+        let _ = taskbar_is_light();
         let _ = transparency_enabled();
     }
 }
