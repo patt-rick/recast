@@ -119,14 +119,19 @@ jobs:
           set -euo pipefail
           exe="Recast_${VERSION}_x64-setup.exe"
           ls -la installer
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$exe"; then
-              echo "::notice::Release $TAG already has $exe; leaving it unchanged."
-              exit 0
-            fi
-            gh release upload "$TAG" "installer/$exe" "installer/$exe.sha256"
-          else
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
             gh release create "$TAG" --draft --verify-tag --title "Recast $VERSION" --generate-notes
-            gh release upload "$TAG" "installer/$exe" "installer/$exe.sha256"
+          fi
+          # Upload only what the release lacks (an installer already there is never replaced),
+          # so a rerun after an interrupted publish finishes the job.
+          assets=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          for f in "$exe" "$exe.sha256"; do
+            if grep -qx "$f" <<< "$assets"; then
+              echo "::notice::Release $TAG already has $f; leaving it unchanged."
+            else
+              gh release upload "$TAG" "installer/$f"
+            fi
+          done
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "true" ]; then
             gh release edit "$TAG" --draft=false
           fi
