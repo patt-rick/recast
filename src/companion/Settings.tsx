@@ -3,6 +3,23 @@ import type { DeepPartial, Settings } from "../shared/types";
 
 type Save = (p: DeepPartial<Settings>) => Promise<unknown>;
 
+/** Moving the thumb only changes the local value; the save happens when the user lets go. */
+function EdgePos({ saved, save }: { saved: number; save: Save }) {
+  const [v, setV] = useState(Math.round(saved * 100));
+  useEffect(() => setV(Math.round(saved * 100)), [saved]);
+  const commit = () => {
+    if (v !== Math.round(saved * 100)) void save({ triggers: { edge_pos: v / 100 } });
+  };
+  return (
+    <span>
+      <input type="range" min={0} max={100} step={5} value={v}
+        onChange={(e) => setV(Number(e.target.value))}
+        onPointerUp={commit} onKeyUp={commit} onBlur={commit} />
+      {" "}{v}%
+    </span>
+  );
+}
+
 export function SettingsView({ s, error, save }: { s: Settings | null; error: string | null; save: Save }) {
   if (!s) return <p className="muted">{error ?? "Loading…"}</p>;
 
@@ -99,9 +116,8 @@ export function TriggerFields({ s, save }: { s: Settings; save: Save }) {
               <option value="bottom">Bottom</option>
             </select>
           </Field>
-          <Field label={`Position along the edge (${Math.round(t.edge_pos * 100)}%)`}>
-            <input type="range" min={0} max={100} step={5} value={Math.round(t.edge_pos * 100)}
-              onChange={(e) => save({ triggers: { edge_pos: Number(e.target.value) / 100 } })} />
+          <Field label="Position along the edge">
+            <EdgePos saved={t.edge_pos} save={save} />
           </Field>
         </>
       )}

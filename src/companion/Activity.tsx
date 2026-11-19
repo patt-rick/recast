@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type Dispatch } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type Dispatch, type MutableRefObject } from "react";
 import { ipc, onJobEvent } from "../shared/ipc";
 import { formatEta } from "../shared/format";
 import type { JobEvent, JobRecord, Kind, PadModel } from "../shared/types";
@@ -47,6 +47,8 @@ export function Activity({ focusJob, incoming }: { focusJob?: { id: string; n: n
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const report = (e: unknown) => setError(String(e));
+  /** The newest navigate already acted on, so a row that remounts (queued to history) doesn't re-expand. */
+  const handledFocus = useRef(0);
 
   useEffect(() => {
     ipc.listJobs().then((records) => {
@@ -174,7 +176,7 @@ export function Activity({ focusJob, incoming }: { focusJob?: { id: string; n: n
           <h2>Running</h2>
           <ul className="jobs">
             {active.map((j) => (
-              <JobRow key={j.id} job={j} dispatch={dispatch} report={report} focused={focusJob?.id === j.id ? focusJob.n : 0} />
+              <JobRow key={j.id} job={j} dispatch={dispatch} report={report} focused={focusJob?.id === j.id ? focusJob.n : 0} handled={handledFocus} />
             ))}
           </ul>
         </>
@@ -186,7 +188,7 @@ export function Activity({ focusJob, incoming }: { focusJob?: { id: string; n: n
       ) : (
         <ul className="jobs">
           {history.map((j) => (
-            <JobRow key={j.id} job={j} dispatch={dispatch} report={report} focused={focusJob?.id === j.id ? focusJob.n : 0} />
+            <JobRow key={j.id} job={j} dispatch={dispatch} report={report} focused={focusJob?.id === j.id ? focusJob.n : 0} handled={handledFocus} />
           ))}
         </ul>
       )}
@@ -219,11 +221,12 @@ function statusLine(j: JobView): string {
   }
 }
 
-function JobRow({ job: j, dispatch, report, focused }: { job: JobView; dispatch: Dispatch<Action>; report: (e: unknown) => void; focused: number }) {
+function JobRow({ job: j, dispatch, report, focused, handled }: { job: JobView; dispatch: Dispatch<Action>; report: (e: unknown) => void; focused: number; handled: MutableRefObject<number> }) {
   const [open, setOpen] = useState(false);
   const rowRef = useRef<HTMLLIElement>(null);
   useEffect(() => {
-    if (!focused) return;
+    if (!focused || focused <= handled.current) return;
+    handled.current = focused;
     setOpen(true);
     rowRef.current?.scrollIntoView({ block: "center" });
   }, [focused]);

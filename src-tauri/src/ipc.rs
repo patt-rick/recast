@@ -322,6 +322,13 @@ pub async fn get_settings(state: State<'_, AppState>) -> Result<Settings, String
     blocking(move || Ok(lock(&settings).settings.clone())).await
 }
 
+/// settings.json couldn't be read at startup, so nothing can be saved (the welcome stays away).
+#[tauri::command]
+pub async fn settings_read_only(state: State<'_, AppState>) -> Result<bool, String> {
+    let settings = state.settings.clone();
+    blocking(move || Ok(lock(&settings).read_only)).await
+}
+
 #[tauri::command]
 pub async fn set_settings(app: AppHandle, patch: serde_json::Value) -> Result<Settings, String> {
     let handle = app.clone();

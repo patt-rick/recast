@@ -14,6 +14,7 @@ use crate::lockutil::lock;
 pub const DONE: &str = "recast-done";
 pub const FAILED: &str = "recast-failed";
 pub const DEST: &str = "recast-dest";
+pub const LOCKED: &str = "recast-locked";
 pub const ENGINE: &str = "recast-engine";
 
 pub fn action_type(t: &Target) -> Option<&'static str> {
@@ -21,6 +22,7 @@ pub fn action_type(t: &Target) -> Option<&'static str> {
         Target::Done(_) => Some(DONE),
         Target::Failed(_) => Some(FAILED),
         Target::DestFailed(_) => Some(DEST),
+        Target::Locked(_) => Some(LOCKED),
         Target::Engine(_) => Some(ENGINE),
         Target::Activity => None,
     }
@@ -35,6 +37,7 @@ pub enum Act {
     },
     Reveal(String),
     Fallback(String),
+    Retry(String),
     InstallEngine(String),
 }
 
@@ -47,8 +50,9 @@ pub fn resolve(action: &str, t: &Target) -> Option<Act> {
     match (action, t) {
         ("show", Target::Done(id)) => Some(Act::Reveal(id.clone())),
         ("fallback", Target::DestFailed(id)) => Some(Act::Fallback(id.clone())),
+        ("retry", Target::Locked(id)) => Some(Act::Retry(id.clone())),
         ("retry", Target::Engine(id)) => Some(Act::InstallEngine(id.clone())),
-        ("details" | "tap", Target::Failed(id) | Target::DestFailed(id)) => {
+        ("details" | "tap", Target::Failed(id) | Target::DestFailed(id) | Target::Locked(id)) => {
             Some(nav("activity", Some(id)))
         }
         ("tap", Target::Engine(_)) => Some(nav("library", None)),
@@ -115,6 +119,7 @@ pub fn init(app: &AppHandle) {
                 a("details", "Details"),
             ],
         ),
+        t(LOCKED, vec![a("retry", "Retry"), a("details", "Details")]),
         t(ENGINE, vec![a("retry", "Retry")]),
     ]) {
         log::warn!("notifications: registering buttons: {e}");
@@ -147,6 +152,11 @@ pub fn show(app: &AppHandle, title: &str, body: &str, target: Option<Target>) {
     }
 }
 
+/// The plain toast for Retry on an engine a conversion is using.
+fn busy_title(name: &str) -> String {
+    format!("{name} is in use. Try again when the conversion finishes.")
+}
+
 #[derive(serde::Serialize, Clone)]
 struct Navigate {
     section: &'static str,
@@ -164,12 +174,19 @@ fn perform(app: &AppHandle, act: Act) {
             );
         }
         Act::Reveal(id) => {
-            let st = app.state::<AppState>();
-            match crate::ipc::job_output(&lock(&st.history), &id) {
+            // The history guard drops at the end of this statement, before Explorer opens.
+            let out = {
+                let st = app.state::<AppState>();
+                crate::ipc::job_output(&lock(&st.history), &id)
+            };
+            match out {
                 Ok(out) => {
-                    if let Err(e) = app.opener().reveal_item_in_dir(out) {
-                        log::warn!("show in folder: {e}");
-                    }
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        if let Err(e) = app.opener().reveal_item_in_dir(out) {
+                            log::warn!("show in folder: {e}");
+                        }
+                    });
                 }
                 Err(e) => log::warn!("show in folder: {e}"),
             }
@@ -182,8 +199,26 @@ fn perform(app: &AppHandle, act: Act) {
                 }
             });
         }
+        Act::Retry(id) => {
+            let jobs = app.state::<AppState>().jobs.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = jobs.retry(&id, false) {
+                    log::warn!("retry: {e}");
+                }
+            });
+        }
         Act::InstallEngine(id) => {
             let st = app.state::<AppState>();
+            if st.engines.in_use(&id) {
+                let name = st
+                    .engines
+                    .list()
+                    .into_iter()
+                    .find(|r| r.id == id)
+                    .map_or_else(|| id.clone(), |r| r.name);
+                show(app, &busy_title(&name), "", None);
+                return;
+            }
             // A retry that fails again must notify again (B15 L7).
             st.reset_engine_notice(&id);
             let engines = st.engines.clone();
@@ -228,6 +263,23 @@ mod tests {
             resolve("show", &Target::Failed(j())),
             None,
             "no such button"
+        );
+        assert_eq!(
+            resolve("retry", &Target::Locked(j())),
+            Some(Act::Retry(j()))
+        );
+        assert_eq!(resolve("fallback", &Target::Locked(j())), None);
+        assert_eq!(
+            resolve("details", &Target::Locked(j())),
+            Some(Act::Navigate {
+                section: "activity",
+                job_id: Some(j())
+            })
+        );
+        assert_eq!(action_type(&Target::Locked(j())), Some(LOCKED));
+        assert_eq!(
+            busy_title("FFmpeg"),
+            "FFmpeg is in use. Try again when the conversion finishes."
         );
         assert_eq!(action_type(&Target::Activity), None);
         assert_eq!(action_type(&Target::DestFailed(j())), Some(DEST));

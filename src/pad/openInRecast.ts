@@ -16,6 +16,11 @@ export const OPEN_IN_RECAST: PresetView = {
   warning: null,
 };
 
+/** What entering "starting" for this preset does: hand the files to Activity, or run jobs. */
+export function startAction(presetId: string): "openInRecast" | "start" {
+  return presetId === OPEN_IN_RECAST_ID ? "openInRecast" : "start";
+}
+
 export function withOpenInRecast(model: PadModel): PadModel {
   return model.open_in_recast && model.presets.length === 0 ? { ...model, presets: [OPEN_IN_RECAST] } : model;
 }

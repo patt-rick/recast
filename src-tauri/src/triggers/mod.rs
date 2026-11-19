@@ -48,6 +48,10 @@ struct Inner {
     desk_layout: Option<(Rect, f64)>,
     /// The position `place_desk` last set, so its own `Moved` event is not saved (L8).
     desk_placed: Option<(i32, i32)>,
+    /// When `place_desk` last ran: `Moved` events right after it are Windows settling.
+    desk_placed_at: Option<Instant>,
+    /// The auto-hide inset the handle was last placed with (part of its layout key).
+    handle_inset: Option<i32>,
     /// The taskbar theme the tray glyph was last set for (None: not read yet).
     light_taskbar: Option<bool>,
 }
@@ -76,11 +80,12 @@ pub fn init(app: &AppHandle) {
 /// stop the hook. Reads the settings itself, at the moment it runs, so quick successive
 /// changes land in order (B11).
 pub fn sync(app: &AppHandle) {
+    let inset = handle_inset(app, Edge::parse(&settings(app).triggers.edge));
     let _ = app.run_on_main_thread({
         let app = app.clone();
         move || {
             let s = settings(&app);
-            place_handle(&app, &s);
+            place_handle(&app, &s, inset);
             refresh_handle(&app, &s, true);
             place_desk(&app, &s);
             set_visible(&app, DESK, s.triggers.desk_pad);
@@ -143,7 +148,7 @@ fn handle_inset(app: &AppHandle, edge: Edge) -> i32 {
     }
 }
 
-fn place_handle(app: &AppHandle, s: &Settings) {
+fn place_handle(app: &AppHandle, s: &Settings, inset: i32) {
     static LOGGED: AtomicBool = AtomicBool::new(false);
     let (Some(w), Some((work, scale))) = (app.get_webview_window(HANDLE), primary_work(app)) else {
         return;
@@ -152,10 +157,10 @@ fn place_handle(app: &AppHandle, s: &Settings) {
     let grown = {
         let mut i = lock(&st.inner);
         i.handle_layout = Some((work, scale));
+        i.handle_inset = Some(inset);
         i.highlighted
     };
     let edge = Edge::parse(&s.triggers.edge);
-    let inset = handle_inset(app, edge);
     let r = geometry::handle_window(edge, s.triggers.edge_pos, work, scale, grown, inset);
     let _ = w.set_position(PhysicalPosition::new(r.x, r.y));
     let _ = w.set_size(PhysicalSize::new(r.w as u32, r.h as u32));
@@ -185,6 +190,7 @@ fn place_desk(app: &AppHandle, s: &Settings) {
         let mut i = lock(&st.inner);
         i.desk_layout = Some((work, scale));
         i.desk_placed = Some((x, y));
+        i.desk_placed_at = Some(Instant::now());
     }
     let _ = w.set_position(PhysicalPosition::new(x, y));
     let _ = w.set_size(PhysicalSize::new(size, size));
@@ -265,6 +271,8 @@ fn tick(app: &AppHandle) {
         let app2 = app.clone();
         let _ = app.run_on_main_thread(move || crate::tray::set_theme(&app2, light));
     }
+    // The auto-hide check asks the shell, so it too stays off the main thread.
+    let inset = handle_inset(app, Edge::parse(&settings(app).triggers.edge));
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         let app = app2;
@@ -276,13 +284,14 @@ fn tick(app: &AppHandle) {
             i.fullscreen = full;
             (
                 changed,
-                layout_changed(true, i.handle_layout, primary_work(&app)),
+                layout_changed(true, i.handle_layout, primary_work(&app))
+                    || i.handle_inset.is_some_and(|p| p != inset),
                 layout_changed(s.triggers.desk_pad, i.desk_layout, desk_work(&app, &s)),
             )
         };
         if handle_stale {
             log::info!("triggers: screen layout changed; re-placing the handle");
-            place_handle(&app, &s);
+            place_handle(&app, &s, inset);
         }
         if desk_stale {
             log::info!("triggers: screen layout changed; re-placing the desk pad");
@@ -367,7 +376,9 @@ fn anchor_for(w: &tauri::Window) -> Option<(i32, i32)> {
             s.triggers.edge_pos,
             work,
             scale,
-            handle_inset(app, edge),
+            lock(&app.state::<TriggerState>().inner)
+                .handle_inset
+                .unwrap_or_else(|| handle_inset(app, edge)),
             pad_px,
         ))
     } else {
@@ -435,21 +446,30 @@ pub fn on_drag(w: &tauri::Window, ev: &DragDropEvent) {
     }
 }
 
-/// A `Moved` event is the user dragging the desk pad only if it is not the position
-/// `place_desk` just set (L8) and a mouse button is down; Windows moving the window itself
-/// (monitor unplugged, DPI change) must not be saved.
-fn is_user_drag(placed: Option<(i32, i32)>, pos: (i32, i32), button_down: bool) -> bool {
-    button_down && placed != Some(pos)
+/// How long after `place_desk` its `Moved` events (and Windows settling the window) are
+/// not the user.
+const PLACE_GRACE: Duration = Duration::from_millis(1000);
+
+/// A `Moved` event is the user moving the desk pad unless it is the position `place_desk`
+/// just set (L8) or arrives within a second of `place_desk` running (Windows settling the
+/// window after a layout change). No button state is consulted: a drag with "show window
+/// contents" off and a keyboard move end with no button down.
+fn is_user_drag(
+    placed: Option<(i32, i32)>,
+    since_placed: Option<Duration>,
+    pos: (i32, i32),
+) -> bool {
+    placed != Some(pos) && since_placed.is_none_or(|d| d >= PLACE_GRACE)
 }
 
 /// The desk pad was dragged: remember where, 500 ms after it stops.
 pub fn desk_moved(app: &AppHandle, pos: PhysicalPosition<i32>) {
     let st = app.state::<TriggerState>();
-    if !is_user_drag(
-        lock(&st.inner).desk_placed,
-        (pos.x, pos.y),
-        platform::any_button_down(),
-    ) {
+    let (placed, since) = {
+        let i = lock(&st.inner);
+        (i.desk_placed, i.desk_placed_at.map(|t| t.elapsed()))
+    };
+    if !is_user_drag(placed, since, (pos.x, pos.y)) {
         return;
     }
     let mut g = lock(&st.desk_save);
@@ -515,8 +535,9 @@ pub fn highlight(app: &AppHandle, on: bool) {
         "widget://highlight",
         serde_json::json!({ "on": on, "edge": edge }),
     );
+    let inset = handle_inset(app, Edge::parse(&edge));
     let app2 = app.clone();
-    let _ = app.run_on_main_thread(move || place_handle(&app2, &settings(&app2)));
+    let _ = app.run_on_main_thread(move || place_handle(&app2, &settings(&app2), inset));
 }
 
 #[cfg(test)]
@@ -524,13 +545,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_a_drag_with_a_button_down_away_from_the_placed_spot_is_saved() {
-        assert!(is_user_drag(Some((10, 20)), (11, 20), true));
-        assert!(is_user_drag(None, (10, 20), true));
+    fn a_move_is_the_user_unless_it_is_the_placed_spot_or_right_after_placing() {
+        let old = Some(Duration::from_secs(30));
+        // Any button state: a drag with window contents off, or a keyboard move.
+        assert!(is_user_drag(Some((10, 20)), old, (11, 20)));
+        assert!(is_user_drag(None, None, (10, 20)));
         // place_desk's own Moved event.
-        assert!(!is_user_drag(Some((10, 20)), (10, 20), true));
-        // Windows moved it (monitor unplugged, DPI): no button is down.
-        assert!(!is_user_drag(Some((10, 20)), (500, 20), false));
+        assert!(!is_user_drag(Some((10, 20)), old, (10, 20)));
+        // Windows settling the window right after a layout change.
+        let fresh = Some(Duration::from_millis(200));
+        assert!(!is_user_drag(Some((10, 20)), fresh, (500, 20)));
+        assert!(is_user_drag(Some((10, 20)), Some(PLACE_GRACE), (500, 20)));
     }
 
     fn rect(w: i32) -> (Rect, f64) {

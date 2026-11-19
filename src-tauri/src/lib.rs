@@ -102,6 +102,8 @@ pub fn run() {
             match window.label() {
                 // Closing the companion hides it; Recast stays in the tray (spec §4.5).
                 "companion" => {
+                    // The first-run highlight is only for a visible companion.
+                    triggers::highlight(window.app_handle(), false);
                     let _ = window.hide();
                     api.prevent_close();
                 }
@@ -140,6 +142,7 @@ pub fn run() {
             ipc::pad_track_cursor,
             ipc::capture_backdrop,
             ipc::highlight_handle,
+            ipc::settings_read_only,
             ipc::open_in_recast,
         ])
         .run(tauri::generate_context!())

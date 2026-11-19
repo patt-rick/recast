@@ -24,6 +24,7 @@ const COMMANDS: &[&str] = &[
     "pad_track_cursor",
     "capture_backdrop",
     "highlight_handle",
+    "settings_read_only",
     "open_in_recast",
 ];
 

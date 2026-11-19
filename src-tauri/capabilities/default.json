@@ -25,6 +25,7 @@
     "allow-notice-text",
     "allow-notices",
     "allow-thumbnail",
-    "allow-highlight-handle"
+    "allow-highlight-handle",
+    "allow-settings-read-only"
   ]
 }

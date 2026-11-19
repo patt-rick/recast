@@ -5,6 +5,7 @@ import { useThumb } from "../shared/useThumb";
 import { SIZE } from "../pad/geometry";
 import { Ring } from "../pad/Ring";
 import { usePad } from "../pad/usePad";
+import { shouldReportStarted } from "./ringStarted";
 
 const mq = (q: string) => window.matchMedia(q);
 
@@ -26,7 +27,8 @@ export function InlineRing({ paths, model, onClose, onStarted }: { paths: string
   const { open } = pad;
   const startedOnce = useRef(false);
   useEffect(() => {
-    if (pad.state.phase.name === "starting" && !startedOnce.current) {
+    // "running" follows `started`, i.e. start_jobs resolved; "starting" can still fail.
+    if (shouldReportStarted(pad.state.phase.name, startedOnce.current)) {
       startedOnce.current = true;
       onStarted?.();
     }

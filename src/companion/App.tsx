@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { createSaveQueue } from "./saveQueue";
+import { showWelcome } from "./welcomeState";
 import { Activity } from "./Activity";
 import { ipc, onNavigate, onOpenFiles } from "../shared/ipc";
 import type { DeepPartial, Settings } from "../shared/types";
@@ -27,14 +29,35 @@ export function App() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [welcomeClosed, setWelcomeClosed] = useState(false);
+  const [readOnly, setReadOnly] = useState<boolean | null>(null);
 
   useEffect(() => {
     ipc.getSettings().then(setSettings).catch((e) => setSettingsError(String(e)));
+    // If we can't tell, don't offer a welcome that might not be able to save "done".
+    ipc.settingsReadOnly().then(setReadOnly, () => setReadOnly(true));
   }, []);
-  const save = useCallback(
-    (patch: DeepPartial<Settings>) => ipc.setSettings(patch).then(setSettings, (e) => setSettingsError(String(e))),
+  // Saves go one after another and only the newest answer is applied, so a drag of a
+  // slider can't land out of order.
+  const save = useMemo(
+    () =>
+      createSaveQueue(
+        (patch: DeepPartial<Settings>) => ipc.setSettings(patch),
+        (s) => {
+          setSettings(s);
+          setSettingsError(null);
+        },
+        (e) => setSettingsError(e),
+      ),
     [],
   );
+  const welcomeOpen = showWelcome({
+    loaded: settings !== null,
+    firstRunDone: settings?.app.first_run_done ?? false,
+    closed: welcomeClosed,
+    readOnly,
+  });
+  const welcomeOpenRef = useRef(false);
+  welcomeOpenRef.current = welcomeOpen;
 
   // The pad's "Open in Recast" hands over a mixed set of files for Activity to group.
   useEffect(() => {
@@ -62,6 +85,7 @@ export function App() {
   useEffect(() => {
     const off = getCurrentWebview().onDragDropEvent((ev) => {
       const p = ev.payload;
+      if (welcomeOpenRef.current) return; // the welcome is modal: nothing behind it takes drops
       const t = router.targetFor(sectionRef.current);
       if (p.type === "drop") {
         if (t === "activity") setSection("activity"); // the ring lives in Activity
@@ -105,7 +129,7 @@ export function App() {
       <main className="content" hidden={section !== "settings"}>
         <SettingsView s={settings} error={settingsError} save={save} />
       </main>
-      {settings && !settings.app.first_run_done && !welcomeClosed && (
+      {welcomeOpen && settings && (
         <Welcome s={settings} save={save} onDone={() => setWelcomeClosed(true)} />
       )}
     </div>

@@ -206,6 +206,7 @@ export function PadApp() {
         setExternal({ x: p.position.x / scale, y: p.position.y / scale });
       } else if (p.type === "leave") {
         dragging.current = false;
+        pendingEnter.current = null;
         setExternal(null);
       } else if (p.type === "drop") {
         dragging.current = false;

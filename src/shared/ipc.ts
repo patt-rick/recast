@@ -35,6 +35,8 @@ export const ipc = {
   /** Licence text of the notice at this index of `notices()`: the engine's own file, else the bundled text. */
   noticeText: (index: number, name: string) => invoke<string>("notice_text", { index, name }),
   notices: () => invoke<Notice[]>("notices"),
+  /** settings.json couldn't be read at startup: nothing can be saved. */
+  settingsReadOnly: () => invoke<boolean>("settings_read_only"),
   /** First run: pulse the edge handle while the welcome points at it. */
   highlightHandle: (on: boolean) => invoke<void>("highlight_handle", { on }),
   /** The pad's "Open in Recast": Activity lists these files grouped by kind. */

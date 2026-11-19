@@ -12,6 +12,8 @@ pub enum Target {
     Failed(String),
     /// A job that couldn't write its output: "Save to fallback folder" and "Details".
     DestFailed(String),
+    /// A job whose destination file was locked: "Retry" and "Details" (spec §7).
+    Locked(String),
     /// A batch or a skip: a click opens Activity.
     Activity,
     /// An engine download that failed: "Retry".
@@ -123,15 +125,11 @@ impl Notifier {
             "failed" => Some(Notification {
                 title: format!("Couldn't convert {}", ev.file),
                 body: message(),
-                target: Some(
-                    if ev.error.as_ref().is_some_and(|e| {
-                        matches!(e.code, ErrorCode::DestUnwritable | ErrorCode::DestLocked)
-                    }) {
-                        Target::DestFailed(ev.job_id.clone())
-                    } else {
-                        Target::Failed(ev.job_id.clone())
-                    },
-                ),
+                target: Some(match ev.error.as_ref().map(|e| &e.code) {
+                    Some(ErrorCode::DestUnwritable) => Target::DestFailed(ev.job_id.clone()),
+                    Some(ErrorCode::DestLocked) => Target::Locked(ev.job_id.clone()),
+                    _ => Target::Failed(ev.job_id.clone()),
+                }),
             }),
             _ => None,
         }
@@ -191,7 +189,7 @@ mod tests {
         });
         assert_eq!(
             n.on_event(&locked).unwrap().target,
-            Some(Target::DestFailed("j".into()))
+            Some(Target::Locked("j".into()))
         );
         for s in ["done", "done"] {
             let _ = n.on_event(&ev("f", 3, s));
