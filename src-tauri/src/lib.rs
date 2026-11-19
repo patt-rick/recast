@@ -65,6 +65,23 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // A real file drag reaching the pad confirms a shake probe; a drop ends the
+            // wait for one (B1). Both arrive here on the main thread, in event order.
+            match event {
+                tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Enter { paths, .. })
+                    if window.label() == pad::LABEL && !paths.is_empty() =>
+                {
+                    pad::drag_entered(window.app_handle());
+                    return;
+                }
+                tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { .. })
+                    if window.label() == pad::LABEL =>
+                {
+                    pad::dropped(window.app_handle());
+                    return;
+                }
+                _ => {}
+            }
             let tauri::WindowEvent::CloseRequested { api, .. } = event else {
                 return;
             };

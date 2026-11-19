@@ -32,8 +32,10 @@ use windows::Win32::System::Threading::{
     GetExitCodeProcess, OpenProcess, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION,
     PROCESS_SYNCHRONIZE, ResumeThread, THREAD_SUSPEND_RESUME, WaitForSingleObject,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
 use windows::Win32::UI::WindowsAndMessaging::{
-    SW_HIDE, SW_SHOWNOACTIVATE, SetWindowDisplayAffinity, ShowWindow, WDA_EXCLUDEFROMCAPTURE,
+    GetSystemMetrics, SM_SWAPBUTTON, SW_HIDE, SW_SHOWNOACTIVATE, SetWindowDisplayAffinity,
+    ShowWindow, WDA_EXCLUDEFROMCAPTURE,
 };
 use windows::core::PCWSTR;
 
@@ -405,6 +407,19 @@ pub fn show_no_activate(hwnd: isize) {
 pub fn hide_window(hwnd: isize) {
     unsafe {
         let _ = ShowWindow(HWND(hwnd as *mut c_void), SW_HIDE);
+    }
+}
+
+/// The primary mouse button is down right now (the physical right button when the user
+/// has swapped buttons). Polled; works without the mouse hook.
+pub fn left_button_down() -> bool {
+    unsafe {
+        let vk = if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
+            VK_RBUTTON
+        } else {
+            VK_LBUTTON
+        };
+        (GetAsyncKeyState(vk.0 as i32) as u16) & 0x8000 != 0
     }
 }
 

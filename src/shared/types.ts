@@ -126,6 +126,10 @@ export interface PadOpen {
   reduced_transparency: boolean;
   /** Increments on every open; pad_show / pad_close are no-ops for a stale one. */
   generation: number;
+  /** A shake probe: invisible until a file drag enters it. */
+  probe: boolean;
+  /** Leave-to-dismiss is armed from the start (the open came from an anchored trigger). */
+  armed: boolean;
 }
 
 export interface JobOptions {

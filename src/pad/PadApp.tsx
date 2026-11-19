@@ -8,6 +8,7 @@ import { useThumb } from "../shared/useThumb";
 import { armedAfter, outsideDistance } from "./cursor";
 import { prepare, release, type GlassSource } from "./glass/backdrop";
 import { planDrop, type PendingDrop } from "./dropPlan";
+import { enterAction } from "./enter";
 import { hitTest } from "./hitTest";
 import { Ring } from "./Ring";
 import { target } from "./states";
@@ -22,11 +23,12 @@ interface Session {
   glass: GlassSource | null;
   /** Drag-mode pad opened with no files yet: "Drop files here", every slot empty. */
   waiting: boolean;
+  /** A shake probe: invisible until a file drag enters it (Rust confirms it, B1). */
+  probe: boolean;
 }
 
 const reducedMotionQuery = () => window.matchMedia("(prefers-reduced-motion: reduce)");
 const darkQuery = () => window.matchMedia("(prefers-color-scheme: dark)");
-const samePaths = (a: string[], b: string[]) => a.length === b.length && a.every((p, i) => p === b[i]);
 const EMPTY: PadModel = { files: [], presets: [], open_in_recast: false };
 
 export function PadApp() {
@@ -83,6 +85,7 @@ export function PadApp() {
     if (req.generation === closedGen.current) return;
     const key = ++seq.current;
     const waiting = req.mode === "drag" && req.paths.length === 0;
+    const probe = req.probe && req.paths.length === 0;
     beginning.current++;
     let model: PadModel, glass: GlassSource | null;
     try {
@@ -93,7 +96,7 @@ export function PadApp() {
             console.warn("inspect failed", e);
             return EMPTY;
           }),
-      req.reduced_transparency
+      req.reduced_transparency || probe
         ? Promise.resolve(null)
         : ipc.captureBackdrop().then(prepare).catch((e) => {
             console.warn("backdrop unavailable, using the solid look", e);
@@ -108,7 +111,7 @@ export function PadApp() {
       if (beginning.current === 0) pendingDrop.current = null;
       return;
     }
-    const next: Session = { key, generation: req.generation, paths: req.paths, mode: req.mode, model, glass, waiting };
+    const next: Session = { key, generation: req.generation, paths: req.paths, mode: req.mode, model, glass, waiting, probe };
     setSession(next);
     padRef.current.open(model, req.paths);
     // A drop that landed before the session existed: run it now (the reducer handles it after `open`).
@@ -125,7 +128,7 @@ export function PadApp() {
         if (req.generation === openGen.current) return;
         openGen.current = req.generation;
         reducedTransparency.current = req.reduced_transparency;
-        armed.current = false;
+        armed.current = req.armed;
         pendingDrop.current = null;
         void begin(req);
       }),
@@ -160,7 +163,7 @@ export function PadApp() {
       setSession((cur) => (cur && cur.generation === s.generation ? { ...cur, mode: "click" } : cur));
       ipc.padShow(s.generation).catch(() => {});
     } else if (plan === "reopen") {
-      void begin({ paths, mode: "click", reduced_transparency: !s.glass, generation: s.generation });
+      void begin({ paths, mode: "click", reduced_transparency: !s.glass, generation: s.generation, probe: false, armed: true });
     }
   };
 
@@ -173,12 +176,11 @@ export function PadApp() {
       if (p.type === "enter") {
         dragging.current = true;
         armed.current = true;
-        // No session yet, or a newer open is still loading: that open owns this drag.
-        if (!s || s.generation !== openGen.current) return;
+        const action = enterAction(s, openGen.current, p.paths);
+        if (!s || action === "ignore") return;
         ipc.padTrackCursor(true, s.generation).catch(() => {});
-        // Dragged files differ from the session's: target the files being dragged (A2).
-        if (!samePaths(p.paths, s.paths) && p.paths.length > 0) {
-          void begin({ paths: p.paths, mode: "drag", reduced_transparency: reducedTransparency.current, generation: s.generation });
+        if (action === "rebegin") {
+          void begin({ paths: p.paths, mode: "drag", reduced_transparency: reducedTransparency.current, generation: s.generation, probe: false, armed: true });
         }
       } else if (p.type === "over") {
         setExternal({ x: p.position.x / scale, y: p.position.y / scale });
@@ -215,7 +217,7 @@ export function PadApp() {
   }, []);
 
   const thumb = useThumb(session?.model.files[0]?.path ?? null);
-  if (!session) return null;
+  if (!session || session.probe) return null;
   return (
     <Ring
       key={session.key}
