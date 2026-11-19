@@ -132,6 +132,22 @@ pub async fn thumbnail(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// Development only: open the pad window as a trigger would (Plan 3 adds the real
+/// triggers). Refused in release builds.
+#[tauri::command]
+pub async fn debug_open_pad(app: AppHandle, paths: Vec<String>, drag: bool) -> Result<(), String> {
+    if !cfg!(debug_assertions) {
+        return Err("Not available in release builds.".into());
+    }
+    let mode = if drag {
+        crate::pad::PadMode::Drag
+    } else {
+        crate::pad::PadMode::Click
+    };
+    crate::pad::open(&app, paths, mode);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn pad_ready(app: AppHandle) -> Result<(), String> {
     crate::pad::ready(&app);

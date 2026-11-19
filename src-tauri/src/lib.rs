@@ -79,6 +79,7 @@ pub fn run() {
             ipc::notice_text,
             ipc::notices,
             ipc::pad_ready,
+            ipc::debug_open_pad,
             ipc::pad_show,
             ipc::pad_close,
             ipc::pad_track_cursor,

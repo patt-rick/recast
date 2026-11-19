@@ -146,6 +146,7 @@ fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
 /// once (without focus) once the page is ready; click mode waits for `pad_show` once
 /// the page has drawn.
 pub fn open(app: &AppHandle, paths: Vec<String>, mode: PadMode) {
+    log::info!("pad: open ({mode:?}, {} files)", paths.len());
     on_main(app, move |app| open_now(app, paths, mode));
 }
 
