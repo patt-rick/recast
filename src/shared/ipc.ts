@@ -37,6 +37,8 @@ export const ipc = {
   notices: () => invoke<Notice[]>("notices"),
   /** First run: pulse the edge handle while the welcome points at it. */
   highlightHandle: (on: boolean) => invoke<void>("highlight_handle", { on }),
+  /** The pad's "Open in Recast": Activity lists these files grouped by kind. */
+  openInRecast: (paths: string[]) => invoke<void>("open_in_recast", { paths }),
 };
 
 async function listenAll<T>(names: readonly string[], cb: (payload: T) => void): Promise<UnlistenFn> {
@@ -50,6 +52,9 @@ export type NavigatePayload = { section: "activity" | "library"; job_id: string 
 /** A notification button or click asked the companion to go somewhere. */
 export const onNavigate = (cb: (p: NavigatePayload) => void) =>
   listen<NavigatePayload>("companion://navigate", (e) => cb(e.payload));
+/** The pad asked the companion to list these files grouped by kind. */
+export const onOpenFiles = (cb: (paths: string[]) => void) =>
+  listen<{ paths: string[] }>("companion://open-files", (e) => cb(e.payload.paths));
 export const onPadOpen = (cb: (p: PadOpen) => void) => listen<PadOpen>("pad://open", (e) => cb(e.payload));
 /** Cursor relative to the pad window, logical px (only while tracking). */
 export const onPadCursor = (cb: (p: { x: number; y: number }) => void) =>

@@ -1,8 +1,9 @@
-import { useEffect, useReducer, useRef, useState, type Dispatch } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, type Dispatch } from "react";
 import { ipc, onJobEvent } from "../shared/ipc";
 import { formatEta } from "../shared/format";
-import type { JobEvent, JobRecord, PadModel } from "../shared/types";
+import type { JobEvent, JobRecord, Kind, PadModel } from "../shared/types";
 import { router } from "./dragRouter";
+import { groupByKind, type Group } from "./groups";
 import { InlineRing } from "./InlineRing";
 import { appendHistory, applyEvent, batchSuffix, empty, nextCursor, PAGE_SIZE, remove, seed, split, withRecord, type JobsState, type JobView } from "./jobs";
 
@@ -31,11 +32,14 @@ function reducer(s: JobsState, a: Action): JobsState {
 interface Dropped {
   paths: string[];
   pad: PadModel;
+  /** Set when this came from a kind group of a mixed drop. */
+  kind?: Kind;
 }
 
-export function Activity({ focusJob }: { focusJob?: { id: string; n: number } | null }) {
+export function Activity({ focusJob, incoming }: { focusJob?: { id: string; n: number } | null; incoming?: { paths: string[]; n: number } | null }) {
   const [jobs, dispatch] = useReducer(reducer, empty);
   const [dropped, setDropped] = useState<Dropped | null>(null);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [hovering, setHovering] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Smallest history seq loaded so far (keyset cursor), and whether the last page was full.
@@ -82,24 +86,48 @@ export function Activity({ focusJob }: { focusJob?: { id: string; n: number } | 
     };
   }, []);
 
+  // One path for drops and for files the pad handed over: single-kind sets get the ring, mixed ones the groups.
+  const receive = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return;
+    try {
+      setError(null);
+      const pad = await ipc.inspect(paths);
+      if (pad.open_in_recast) {
+        setDropped(null);
+        setGroups(groupByKind(pad.files));
+      } else {
+        setGroups([]);
+        setDropped({ paths, pad });
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   useEffect(
     () =>
-      router.subscribe("activity", async (ev) => {
+      router.subscribe("activity", (ev) => {
         if (ev.type === "enter" || ev.type === "over") setHovering(true);
         else if (ev.type === "leave") setHovering(false);
         else {
           setHovering(false);
-          if (ev.paths.length === 0) return;
-          try {
-            setError(null);
-            setDropped({ paths: ev.paths, pad: await ipc.inspect(ev.paths) });
-          } catch (e) {
-            setError(String(e));
-          }
+          void receive(ev.paths);
         }
       }),
-    [],
+    [receive],
   );
+
+  useEffect(() => {
+    if (incoming) void receive(incoming.paths);
+  }, [incoming, receive]);
+
+  const openGroup = async (g: Group) => {
+    try {
+      setDropped({ paths: g.paths, pad: await ipc.inspect(g.paths), kind: g.kind });
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const { active, history } = split(jobs);
 
@@ -109,7 +137,37 @@ export function Activity({ focusJob }: { focusJob?: { id: string; n: number } | 
         {hovering ? "Release to see conversions" : "Drop files here to convert them"}
       </div>
       {error && <p className="error" role="alert">{error}</p>}
-      {dropped && <InlineRing paths={dropped.paths} model={dropped.pad} onClose={() => setDropped(null)} />}
+      {groups.length > 0 && (
+        <div className="groups" aria-label="Dropped files by kind">
+          <p>These files are different kinds. Convert each group on its own.</p>
+          <ul>
+            {groups.map((g) => (
+              <li key={g.kind}>
+                <span>
+                  <strong>{g.label}</strong>{" "}
+                  <span className="muted">{g.names.slice(0, 3).join(", ")}{g.names.length > 3 ? "…" : ""}</span>
+                </span>
+                <button disabled={g.kind === "unknown"} title={g.kind === "unknown" ? "Recast has no conversions for these" : undefined}
+                  onClick={() => openGroup(g)}>
+                  Choose conversion
+                </button>
+              </li>
+            ))}
+          </ul>
+          <button className="ghost" onClick={() => setGroups([])}>Clear</button>
+        </div>
+      )}
+      {dropped && (
+        <InlineRing
+          paths={dropped.paths}
+          model={dropped.pad}
+          onClose={() => setDropped(null)}
+          onStarted={() => {
+            const k = dropped.kind;
+            if (k) setGroups((gs) => gs.filter((x) => x.kind !== k));
+          }}
+        />
+      )}
 
       {active.length > 0 && (
         <>

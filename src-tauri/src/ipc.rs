@@ -130,6 +130,19 @@ pub async fn highlight_handle(app: AppHandle, on: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Serialize, Clone)]
+struct OpenFiles {
+    paths: Vec<String>,
+}
+
+/// The pad's "Open in Recast" (spec §5.6): Activity lists these files grouped by kind.
+#[tauri::command]
+pub async fn open_in_recast(app: AppHandle, paths: Vec<String>) -> Result<(), String> {
+    crate::tray::show_companion(&app);
+    app.emit_to("companion", "companion://open-files", OpenFiles { paths })
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn pad_ready(app: AppHandle) -> Result<(), String> {
     crate::pad::ready(&app);

@@ -10,6 +10,7 @@ import { prepare, release, type GlassSource } from "./glass/backdrop";
 import { planDrop, type PendingDrop } from "./dropPlan";
 import { enterAction } from "./enter";
 import { hitTest } from "./hitTest";
+import { withOpenInRecast } from "./openInRecast";
 import { Ring } from "./Ring";
 import { target } from "./states";
 import { usePad } from "./usePad";
@@ -109,6 +110,7 @@ export function PadApp() {
     } finally {
       beginning.current--;
     }
+    model = withOpenInRecast(model);
     if (key !== seq.current || req.generation === closedGen.current) {
       release(glass);
       if (beginning.current === 0) {

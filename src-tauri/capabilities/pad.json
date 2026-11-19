@@ -12,6 +12,7 @@
     "allow-pad-ready",
     "allow-pad-show",
     "allow-pad-close",
-    "allow-pad-track-cursor"
+    "allow-pad-track-cursor",
+    "allow-open-in-recast"
   ]
 }

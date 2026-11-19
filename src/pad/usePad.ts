@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { ipc, onJobEvent } from "../shared/ipc";
 import type { PadModel, PresetView } from "../shared/types";
+import { OPEN_IN_RECAST_ID } from "./openInRecast";
 import { paginate } from "./paging";
 import { emptyBatch, view, withEvent, withIds, type Batch, type BatchView } from "./progress";
 import { closed, reduce, type PadEvent, type PadState } from "./states";
@@ -46,6 +47,11 @@ export function usePad(opts: { reducedMotion: boolean; onClosed: () => void }): 
   const phase = state.phase;
   useEffect(() => {
     if (phase.name !== "starting") return;
+    if (phase.presetId === OPEN_IN_RECAST_ID) {
+      ipc.openInRecast(paths.current).catch((e) => console.warn("open in Recast failed", e));
+      dispatch({ type: "dismiss" });
+      return;
+    }
     runningId.current = phase.presetId;
     following.current = true;
     let live = true;

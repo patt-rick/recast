@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { Activity } from "./Activity";
-import { onNavigate } from "../shared/ipc";
+import { onNavigate, onOpenFiles } from "../shared/ipc";
 import { router } from "./dragRouter";
 import { Library } from "./Library";
 import { SettingsView } from "./Settings";
@@ -20,6 +20,18 @@ export function App() {
   const sectionRef = useRef(section);
   sectionRef.current = section;
   const [focusJob, setFocusJob] = useState<{ id: string; n: number } | null>(null);
+
+  const [incoming, setIncoming] = useState<{ paths: string[]; n: number } | null>(null);
+  // The pad's "Open in Recast" hands over a mixed set of files for Activity to group.
+  useEffect(() => {
+    const off = onOpenFiles((paths) => {
+      setSection("activity");
+      setIncoming((x) => ({ paths, n: (x?.n ?? 0) + 1 }));
+    });
+    return () => {
+      off.then((f) => f());
+    };
+  }, []);
 
   // Notification buttons and clicks point the companion at a section, and maybe a job.
   useEffect(() => {
@@ -68,7 +80,7 @@ export function App() {
       </nav>
       {/* All views stay mounted so Activity keeps receiving job events. */}
       <main className="content" hidden={section !== "activity"}>
-        <Activity focusJob={focusJob} />
+        <Activity focusJob={focusJob} incoming={incoming} />
       </main>
       <main className="content" hidden={section !== "tools"}>
         <Tools />

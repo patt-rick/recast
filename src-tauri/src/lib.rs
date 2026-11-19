@@ -140,6 +140,7 @@ pub fn run() {
             ipc::pad_track_cursor,
             ipc::capture_backdrop,
             ipc::highlight_handle,
+            ipc::open_in_recast,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Recast");

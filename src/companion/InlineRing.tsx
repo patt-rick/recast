@@ -1,5 +1,5 @@
 /** The ring inside the companion (spec §4.5 item 1): solid look, click or keyboard. */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PadModel } from "../shared/types";
 import { useThumb } from "../shared/useThumb";
 import { SIZE } from "../pad/geometry";
@@ -20,10 +20,17 @@ function useFitScale(): number {
   return Math.max(0.3, k);
 }
 
-export function InlineRing({ paths, model, onClose }: { paths: string[]; model: PadModel; onClose: () => void }) {
+export function InlineRing({ paths, model, onClose, onStarted }: { paths: string[]; model: PadModel; onClose: () => void; onStarted?: () => void }) {
   const [reducedMotion] = useState(() => mq("(prefers-reduced-motion: reduce)").matches);
   const pad = usePad({ reducedMotion, onClosed: onClose });
   const { open } = pad;
+  const startedOnce = useRef(false);
+  useEffect(() => {
+    if (pad.state.phase.name === "starting" && !startedOnce.current) {
+      startedOnce.current = true;
+      onStarted?.();
+    }
+  }, [pad.state.phase.name, onStarted]);
   // Runs twice under StrictMode in dev, which is harmless.
   useEffect(() => {
     open(model, paths);
