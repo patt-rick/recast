@@ -173,7 +173,8 @@ export function PadApp() {
       if (p.type === "enter") {
         dragging.current = true;
         armed.current = true;
-        if (!s) return;
+        // No session yet, or a newer open is still loading: that open owns this drag.
+        if (!s || s.generation !== openGen.current) return;
         ipc.padTrackCursor(true, s.generation).catch(() => {});
         // Dragged files differ from the session's: target the files being dragged (A2).
         if (!samePaths(p.paths, s.paths) && p.paths.length > 0) {
@@ -187,7 +188,9 @@ export function PadApp() {
       } else if (p.type === "drop") {
         dragging.current = false;
         setExternal(null);
-        if (!s) {
+        // No session yet, or the session showing is older than an open still loading:
+        // park the drop for that open (acting on the old one would revive a stale generation).
+        if (!s || s.generation !== openGen.current) {
           if (beginning.current > 0) pendingDrop.current = { x: p.position.x / scale, y: p.position.y / scale, paths: p.paths };
           return;
         }
