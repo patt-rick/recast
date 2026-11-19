@@ -15,6 +15,7 @@ pub mod platform;
 pub mod presets;
 pub mod proc;
 pub mod settings;
+pub mod shell;
 pub mod thumbs;
 pub mod tray;
 
