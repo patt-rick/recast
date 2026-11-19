@@ -19,6 +19,7 @@ pub mod settings;
 pub mod shell;
 pub mod thumbs;
 pub mod tray;
+pub mod triggers;
 
 #[cfg(test)]
 mod testutil;
