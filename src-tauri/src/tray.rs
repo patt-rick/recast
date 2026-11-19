@@ -3,6 +3,21 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
 
+/// The glyph for the taskbar's theme (§12): white on a dark taskbar, dark on a light one.
+pub fn glyph(light_taskbar: bool) -> tauri::image::Image<'static> {
+    if light_taskbar {
+        tauri::include_image!("icons/tray-light-taskbar.png")
+    } else {
+        tauri::include_image!("icons/tray-dark-taskbar.png")
+    }
+}
+
+pub fn set_theme(app: &AppHandle, light_taskbar: bool) {
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_icon(Some(glyph(light_taskbar)));
+    }
+}
+
 pub fn show_companion(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("companion") {
         let _ = w.show();
@@ -17,7 +32,7 @@ pub fn build(app: &tauri::App) -> tauri::Result<()> {
     let convert = MenuItem::with_id(app, "convert", "Convert files…", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &convert, &quit])?;
     TrayIconBuilder::with_id("main")
-        .icon(app.default_window_icon().cloned().expect("bundle icon"))
+        .icon(glyph(crate::platform::taskbar_is_light()))
         .tooltip("Recast")
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -63,4 +78,17 @@ fn pick_and_open_pad(app: &AppHandle) {
             crate::pad::open(&app, paths, crate::pad::PadMode::Click);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn both_tray_glyphs_are_square_and_not_empty() {
+        for light in [true, false] {
+            let g = super::glyph(light);
+            assert!(g.width() > 0 && g.height() > 0);
+            assert_eq!(g.width(), g.height());
+            assert!(g.rgba().iter().any(|&b| b != 0));
+        }
+    }
 }

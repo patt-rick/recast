@@ -48,6 +48,8 @@ struct Inner {
     desk_layout: Option<(Rect, f64)>,
     /// The position `place_desk` last set, so its own `Moved` event is not saved (L8).
     desk_placed: Option<(i32, i32)>,
+    /// The taskbar theme the tray glyph was last set for (None: not read yet).
+    light_taskbar: Option<bool>,
 }
 
 fn settings(app: &AppHandle) -> Settings {
@@ -246,10 +248,23 @@ fn layout_changed(
 }
 
 /// Foreground change or the 1 s timer (watcher thread): read the foreground window here,
-/// then do the rest on the main thread: auto-hide the handle over fullscreen apps, and
+/// follow the taskbar theme, then do the rest on the main thread: auto-hide the handle over fullscreen apps, and
 /// re-place the widgets when the screen layout or scale changed (B12).
 fn tick(app: &AppHandle) {
     let full = fullscreen_on(true);
+    // The registry read stays on the watcher thread; only the icon swap needs the main one.
+    let light = platform::taskbar_is_light();
+    let theme_changed = {
+        let st = app.state::<TriggerState>();
+        let mut i = lock(&st.inner);
+        let changed = i.light_taskbar.is_some_and(|l| l != light);
+        i.light_taskbar = Some(light);
+        changed
+    };
+    if theme_changed {
+        let app2 = app.clone();
+        let _ = app.run_on_main_thread(move || crate::tray::set_theme(&app2, light));
+    }
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
         let app = app2;
